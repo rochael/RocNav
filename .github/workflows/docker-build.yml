@@ -12,8 +12,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      REGISTRY: docker.io
-      IMAGE_NAME: mynav
+      REGISTRY: ghcr.io
+      IMAGE_NAME: rocnav
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,13 +27,14 @@ jobs:
       - name: Docker Hub Login
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & Push Docker image
         run: |
           VERSION=$(cat VERSION 2>/dev/null || echo dev)
-          IMAGE=${REGISTRY}/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}
+          IMAGE=${REGISTRY}/${{ github.actor }}/${IMAGE_NAME}
           docker buildx build \
             --platform linux/amd64 \
             --build-arg VERSION=$VERSION \
@@ -41,3 +42,20 @@ jobs:
             -t $IMAGE:latest \
             --push \
             .
+
+      - name: 输出镜像信息
+        run: |
+          echo "### 🐳 Docker镜像构建成功！" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**镜像标签：**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.version_tag }}" ]; then
+            echo "**版本标签：** ${{ inputs.version_tag }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.include_latest }}" == "true" ]; then
+            echo "**包含latest标签：** 是" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**包含latest标签：** 否" >> $GITHUB_STEP_SUMMARY
+          fi
