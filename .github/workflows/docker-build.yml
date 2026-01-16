@@ -1,6 +1,26 @@
 name: Docker Build & Push
 
 on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: '部署环境'
+        required: true
+        type: choice
+        options:
+          - Production
+          - Development
+          - Staging
+      version_tag:
+        description: '版本标签 (例如: v1.0.0)'
+        required: false
+        type: string
+        default: ''
+      include_latest:
+        description: 'latest标签'
+        required: false
+        type: boolean
+        default: true
   push:
     branches:
       - main
@@ -31,6 +51,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: 提取 Docker 元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            ${{ inputs.include_latest == true && 'type=raw,value=latest' || '' }}
+            ${{ inputs.version_tag != '' && format('type=raw,value={0}', inputs.version_tag) || '' }}
+          flavor: |
+            latest=false
+            
       - name: Build & Push Docker image
         run: |
           VERSION=$(cat VERSION 2>/dev/null || echo dev)
