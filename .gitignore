@@ -1,0 +1,9 @@
+# gitignore
+
+.env
+bin/
+vendor/
+data/
+
+node_modules
+dist
