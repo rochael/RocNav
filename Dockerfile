@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-ARG GO_VERSION=1.23
-ARG NODE_VERSION=20
+ARG GO_VERSION=1.25
+ARG NODE_VERSION=23
 
 FROM node:${NODE_VERSION}-alpine AS frontend
 WORKDIR /app
