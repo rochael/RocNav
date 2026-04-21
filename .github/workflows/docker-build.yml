@@ -56,7 +56,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ env.REGISTRY }}/${{ github.actor }}/${{ env.IMAGE_NAME }}
           tags: |
             ${{ inputs.include_latest == true && 'type=raw,value=latest' || '' }}
             ${{ inputs.version_tag != '' && format('type=raw,value={0}', inputs.version_tag) || '' }}
