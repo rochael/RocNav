@@ -356,6 +356,7 @@ function AdminPage({
   const handleLogout = async () => {
     await api('/api/auth/logout', { method: 'POST' })
     setUser(null)
+    setTotpInfo(null)
     showMessage('已退出')
   }
 
