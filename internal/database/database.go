@@ -53,7 +53,7 @@ func SeedAdmin(db *gorm.DB, email, password string, hashFunc func(string) (strin
 		log.Printf("seed admin hash: %v", err)
 		return
 	}
-	u := models.User{Email: email, PasswordHash: hash, Nickname: "Admin", IsAdmin: true}
+	u := models.User{Email: email, PasswordHash: hash, Nickname: "Admin", Enabled: true, IsAdmin: true}
 	if err := db.Create(&u).Error; err != nil {
 		log.Printf("seed admin create: %v", err)
 	} else {

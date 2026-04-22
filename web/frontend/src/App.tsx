@@ -3,7 +3,8 @@ import { BrowserRouter, Link, Route, Routes, useLocation } from 'react-router-do
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd'
 import './App.css'
 
-type User = { id: number; email: string; nickname?: string; is_admin: boolean; github_id?: string; google_id?: string }
+type User = { id: number; email: string; nickname?: string; enabled?: boolean; is_admin: boolean; github_id?: string; google_id?: string }
+type AdminUser = User & { created_at: string; updated_at: string }
 type Category = { id: number; name: string; description?: string; sort_order: number }
 type LinkItem = { id: number; category_id: number; title: string; url: string; is_public: boolean; sort_order: number; icon_url?: string; click_count?: number; remark?: string }
 
@@ -74,6 +75,14 @@ function getErrorMessage(error: unknown, fallback: string) {
         return '请输入昵称'
       case 'email already exists':
         return '该邮箱已被注册'
+      case 'user disabled':
+        return '该账号已被停用'
+      case 'cannot disable yourself':
+        return '不能停用当前登录账号'
+      case 'cannot demote yourself':
+        return '不能取消当前登录账号的管理员身份'
+      case 'cannot revoke last admin':
+        return '系统至少需要保留一个管理员'
       default:
         return serverMessage
     }
@@ -237,12 +246,17 @@ function AdminPage({
   setMessage: (v: string | null) => void
   loadAll: () => Promise<void>
 }) {
-  const [tab, setTab] = useState<'categories' | 'links' | 'profile'>('categories')
+  const [tab, setTab] = useState<'categories' | 'links' | 'users' | 'profile'>(user?.is_admin ? 'categories' : 'profile')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [authForm, setAuthForm] = useState({ email: '', password: '', nickname: '', otp: '' })
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
   const [editingLink, setEditingLink] = useState<LinkItem | null>(null)
+  const [users, setUsers] = useState<AdminUser[]>([])
+  const [usersLoading, setUsersLoading] = useState(false)
+  const [userSearch, setUserSearch] = useState('')
+  const [enabledFilter, setEnabledFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
+  const [editingUser, setEditingUser] = useState<AdminUser | null>(null)
   const [totpInfo, setTotpInfo] = useState<{ secret?: string; url?: string } | null>(null)
   const [categoryForm, setCategoryForm] = useState({ name: '', description: '', sort_order: 0 })
   const [linkForm, setLinkForm] = useState({ category_id: '', title: '', url: '', is_public: true, sort_order: 0, icon_url: '', remark: '' })
@@ -391,6 +405,35 @@ function AdminPage({
     }
   }, [allowRegister, authMode])
 
+  const reloadUsers = useCallback(async () => {
+    if (!user?.is_admin) return
+    const params = new URLSearchParams()
+    if (userSearch.trim()) params.set('q', userSearch.trim())
+    if (enabledFilter === 'enabled') params.set('enabled', 'true')
+    if (enabledFilter === 'disabled') params.set('enabled', 'false')
+    const query = params.toString()
+    setUsersLoading(true)
+    try {
+      const res = await api<{ users: AdminUser[] }>(`/api/admin/users${query ? `?${query}` : ''}`)
+      setUsers(res.users || [])
+    } catch (error) {
+      showMessage(getErrorMessage(error, '获取用户列表失败'))
+    } finally {
+      setUsersLoading(false)
+    }
+  }, [enabledFilter, showMessage, user?.is_admin, userSearch])
+
+  useEffect(() => {
+    if (!user) return
+    if (!user.is_admin && tab !== 'profile') {
+      setTab('profile')
+      return
+    }
+    if (user.is_admin && tab === 'users') {
+      void reloadUsers()
+    }
+  }, [reloadUsers, tab, user])
+
   useEffect(() => {
     if (tab === 'profile' && user) {
       void loadTotp()
@@ -417,6 +460,50 @@ function AdminPage({
       await loadAll()
     } catch (error) {
       showMessage(getErrorMessage(error, '创建链接失败'))
+    }
+  }
+
+  const handleEditUser = (targetUser: AdminUser) => {
+    setEditingUser(targetUser)
+  }
+
+  const handleUpdateUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingUser) return
+    try {
+      const res = await api<{ user: User }>(`/api/admin/users/${editingUser.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          email: editingUser.email,
+          nickname: editingUser.nickname || '',
+          is_admin: editingUser.is_admin,
+          enabled: editingUser.enabled ?? true,
+        }),
+      })
+      if (user && res.user.id === user.id) {
+        setUser(res.user)
+      }
+      setEditingUser(null)
+      showMessage('用户信息已更新')
+      await reloadUsers()
+    } catch (error) {
+      showMessage(getErrorMessage(error, '更新用户失败'))
+    }
+  }
+
+  const handleToggleUserEnabled = async (targetUser: AdminUser) => {
+    try {
+      const res = await api<{ user: User }>(`/api/admin/users/${targetUser.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: !(targetUser.enabled ?? true) }),
+      })
+      if (user && res.user.id === user.id) {
+        setUser(res.user)
+      }
+      showMessage((targetUser.enabled ?? true) ? '用户已停用' : '用户已启用')
+      await reloadUsers()
+    } catch (error) {
+      showMessage(getErrorMessage(error, '更新用户状态失败'))
     }
   }
 
@@ -467,12 +554,19 @@ function AdminPage({
           </button>
           <aside className="hidden h-fit w-[240px] rounded-2xl bg-white p-5 shadow-lg lg:block sticky top-8">
             <nav className="flex flex-col gap-2 text-sm font-medium text-gray-600">
-              <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('categories')}>
-                <span>📁</span> 分类管理
-              </button>
-              <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('links')}>
-                <span>🔗</span> 链接管理
-              </button>
+              {user.is_admin && (
+                <>
+                  <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('categories')}>
+                    <span>📁</span> 分类管理
+                  </button>
+                  <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('links')}>
+                    <span>🔗</span> 链接管理
+                  </button>
+                  <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('users')}>
+                    <span>🧑‍💼</span> 用户管理
+                  </button>
+                </>
+              )}
               <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('profile')}>
                 <span>👤</span> 个人信息
               </button>
@@ -486,12 +580,19 @@ function AdminPage({
                   <div className="text-sm font-semibold text-gray-700">菜单</div>
                   <button onClick={() => setMobileNavOpen(false)} className="text-gray-500 hover:text-gray-800">✕</button>
                 </div>
-                <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('categories'); setMobileNavOpen(false) }}>
-                  <span>📁</span> 分类管理
-                </button>
-                <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('links'); setMobileNavOpen(false) }}>
-                  <span>🔗</span> 链接管理
-                </button>
+                {user.is_admin && (
+                  <>
+                    <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('categories'); setMobileNavOpen(false) }}>
+                      <span>📁</span> 分类管理
+                    </button>
+                    <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('links'); setMobileNavOpen(false) }}>
+                      <span>🔗</span> 链接管理
+                    </button>
+                    <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('users'); setMobileNavOpen(false) }}>
+                      <span>🧑‍💼</span> 用户管理
+                    </button>
+                  </>
+                )}
                 <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('profile'); setMobileNavOpen(false) }}>
                   <span>👤</span> 个人信息
                 </button>
@@ -725,6 +826,72 @@ function AdminPage({
         </div>
       )}
 
+      {user && user.is_admin && tab === 'users' && (
+        <div className="space-y-6">
+          <div className="rounded-2xl bg-white p-6 shadow-lg">
+            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-gray-800">用户管理</h3>
+                <p className="mt-1 text-sm text-gray-500">查看全部账号、筛选启用状态，并编辑基础信息与权限。</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,280px)_140px]">
+                <input
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+                  placeholder="搜索邮箱或昵称"
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                />
+                <select
+                  className="rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+                  value={enabledFilter}
+                  onChange={(e) => setEnabledFilter(e.target.value as 'all' | 'enabled' | 'disabled')}
+                >
+                  <option value="all">全部状态</option>
+                  <option value="enabled">仅启用</option>
+                  <option value="disabled">仅禁用</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white p-6 shadow-lg">
+            {usersLoading ? (
+              <div className="text-sm text-gray-500">加载用户列表中...</div>
+            ) : users.length === 0 ? (
+              <div className="text-sm text-gray-500">没有匹配的用户</div>
+            ) : (
+              <div className="space-y-4">
+                {users.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-gray-100 bg-gray-50 p-4 shadow-sm">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-base font-semibold text-gray-800">{item.nickname || '未设置昵称'}</div>
+                          <span className={`rounded-full px-2 py-1 text-[11px] ${item.enabled ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>{item.enabled ? '已启用' : '已禁用'}</span>
+                          {item.is_admin && <span className="rounded-full bg-accent/10 px-2 py-1 text-[11px] text-accent">管理员</span>}
+                        </div>
+                        <div className="text-sm text-gray-600">{item.email}</div>
+                        <div className="flex flex-wrap gap-2 text-xs text-gray-500">
+                          <span className={`rounded-full px-2 py-1 ${item.google_id ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>{item.google_id ? 'Google 已绑定' : 'Google 未绑定'}</span>
+                          <span className={`rounded-full px-2 py-1 ${item.github_id ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>{item.github_id ? 'GitHub 已绑定' : 'GitHub 未绑定'}</span>
+                          <span className="rounded-full bg-gray-100 px-2 py-1 text-gray-500">创建于 {new Date(item.created_at).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => handleEditUser(item)} className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-gray-200 hover:bg-gray-50">编辑</button>
+                        <button onClick={() => handleToggleUserEnabled(item)} className={`rounded-lg px-3 py-2 text-sm font-medium shadow-sm ${item.enabled ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
+                          {item.enabled ? '停用' : '启用'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {user && tab === 'profile' && (
         <div className="space-y-6">
           <div className="rounded-2xl bg-white p-6 shadow-lg">
@@ -909,6 +1076,52 @@ function AdminPage({
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setEditingLink(null)} className="rounded-lg bg-gray-100 px-4 py-2 text-sm text-gray-700 hover:bg-gray-200">取消</button>
+            <button type="submit" className="rounded-lg bg-accent px-4 py-2 text-sm text-white shadow-md hover:bg-opacity-90">保存</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal isOpen={!!editingUser} onClose={() => setEditingUser(null)} title="编辑用户">
+        <form onSubmit={handleUpdateUser} className="flex flex-col gap-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">邮箱</label>
+            <input
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+              value={editingUser?.email || ''}
+              onChange={(e) => setEditingUser((prev) => prev ? ({ ...prev, email: e.target.value }) : null)}
+              required
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">昵称</label>
+            <input
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+              value={editingUser?.nickname || ''}
+              onChange={(e) => setEditingUser((prev) => prev ? ({ ...prev, nickname: e.target.value }) : null)}
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={editingUser?.is_admin || false}
+                onChange={(e) => setEditingUser((prev) => prev ? ({ ...prev, is_admin: e.target.checked }) : null)}
+                className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent"
+              />
+              管理员
+            </label>
+            <label className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={editingUser?.enabled ?? true}
+                onChange={(e) => setEditingUser((prev) => prev ? ({ ...prev, enabled: e.target.checked }) : null)}
+                className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent"
+              />
+              已启用
+            </label>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={() => setEditingUser(null)} className="rounded-lg bg-gray-100 px-4 py-2 text-sm text-gray-700 hover:bg-gray-200">取消</button>
             <button type="submit" className="rounded-lg bg-accent px-4 py-2 text-sm text-white shadow-md hover:bg-opacity-90">保存</button>
           </div>
         </form>

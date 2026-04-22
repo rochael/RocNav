@@ -41,6 +41,9 @@ func (a *App) registerRoutes() {
 	a.Router.GET("/api/auth/google/start", a.handleGoogleStart)
 	a.Router.GET("/api/auth/google/callback", a.handleGoogleCallback)
 
+	a.Router.GET("/api/admin/users", a.adminRequired(), a.handleListUsers)
+	a.Router.PUT("/api/admin/users/:id", a.adminRequired(), a.handleUpdateUser)
+
 	a.Router.GET("/api/categories", a.handleListCategories)
 	a.Router.POST("/api/categories", a.authRequired(), a.handleCreateCategory)
 	a.Router.PUT("/api/categories/:id", a.authRequired(), a.handleUpdateCategory)
@@ -95,6 +98,22 @@ func (a *App) authRequired() gin.HandlerFunc {
 	}
 }
 
+func (a *App) adminRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, err := a.currentUser(c)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		if !user.IsAdmin {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+			return
+		}
+		c.Set("user", user)
+		c.Next()
+	}
+}
+
 func (a *App) currentUser(c *gin.Context) (*models.User, error) {
 	token := ""
 	if ck, err := c.Cookie(tokenCookie); err == nil {
@@ -116,6 +135,10 @@ func (a *App) currentUser(c *gin.Context) (*models.User, error) {
 	var user models.User
 	if err := a.DB.First(&user, claims.UserID).Error; err != nil {
 		return nil, err
+	}
+	if !user.Enabled {
+		a.clearToken(c)
+		return nil, errors.New("user disabled")
 	}
 	return &user, nil
 }
@@ -188,7 +211,7 @@ func (a *App) handleRegister(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot hash password"})
 		return
 	}
-	u := models.User{Email: req.Email, PasswordHash: hash, Nickname: req.Nickname, TOTPSecret: secret}
+	u := models.User{Email: req.Email, PasswordHash: hash, Nickname: req.Nickname, TOTPSecret: secret, Enabled: true}
 	if err := a.DB.Create(&u).Error; err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "user exists"})
 		return
@@ -215,6 +238,10 @@ func (a *App) handleLogin(c *gin.Context) {
 	var u models.User
 	if err := a.DB.Where("email = ?", strings.ToLower(req.Email)).First(&u).Error; err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	if !u.Enabled {
+		c.JSON(http.StatusForbidden, gin.H{"error": "user disabled"})
 		return
 	}
 	if u.PasswordHash == "" {
@@ -395,6 +422,130 @@ func (a *App) oauthRedirectURL(token string, flowState oauthFlowState, fallbackR
 	query.Set("token", token)
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
+}
+
+func (a *App) handleListUsers(c *gin.Context) {
+	q := strings.TrimSpace(strings.ToLower(c.Query("q")))
+	enabledFilter := strings.TrimSpace(strings.ToLower(c.Query("enabled")))
+
+	type adminUserResponse struct {
+		ID        uint      `json:"id"`
+		Email     string    `json:"email"`
+		Nickname  string    `json:"nickname"`
+		IsAdmin   bool      `json:"is_admin"`
+		Enabled   bool      `json:"enabled"`
+		GitHubID  string    `json:"github_id"`
+		GoogleID  string    `json:"google_id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+
+	dbq := a.DB.Model(&models.User{}).Order("created_at desc, id desc")
+	if q != "" {
+		like := fmt.Sprintf("%%%s%%", q)
+		dbq = dbq.Where("LOWER(email) LIKE ? OR LOWER(nickname) LIKE ?", like, like)
+	}
+	switch enabledFilter {
+	case "true", "1":
+		dbq = dbq.Where("enabled = ?", true)
+	case "false", "0":
+		dbq = dbq.Where("enabled = ?", false)
+	}
+
+	var users []models.User
+	if err := dbq.Find(&users).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
+
+	resp := make([]adminUserResponse, 0, len(users))
+	for _, user := range users {
+		resp = append(resp, adminUserResponse{
+			ID:        user.ID,
+			Email:     user.Email,
+			Nickname:  user.Nickname,
+			IsAdmin:   user.IsAdmin,
+			Enabled:   user.Enabled,
+			GitHubID:  user.GitHubID,
+			GoogleID:  user.GoogleID,
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"users": resp})
+}
+
+func (a *App) handleUpdateUser(c *gin.Context) {
+	actor := c.MustGet("user").(*models.User)
+	var target models.User
+	if err := a.DB.First(&target, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+
+	var req struct {
+		Email    *string `json:"email"`
+		Nickname *string `json:"nickname"`
+		IsAdmin  *bool   `json:"is_admin"`
+		Enabled  *bool   `json:"enabled"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+
+	if req.Enabled != nil && !*req.Enabled && actor.ID == target.ID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "cannot disable yourself"})
+		return
+	}
+	if req.IsAdmin != nil && !*req.IsAdmin && actor.ID == target.ID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "cannot demote yourself"})
+		return
+	}
+	if req.IsAdmin != nil && target.IsAdmin && !*req.IsAdmin {
+		var adminCount int64
+		a.DB.Model(&models.User{}).Where("is_admin = ?", true).Count(&adminCount)
+		if adminCount <= 1 {
+			c.JSON(http.StatusForbidden, gin.H{"error": "cannot revoke last admin"})
+			return
+		}
+	}
+
+	updates := map[string]any{}
+	if req.Email != nil {
+		email := strings.ToLower(strings.TrimSpace(*req.Email))
+		if email == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "email required"})
+			return
+		}
+		updates["email"] = email
+	}
+	if req.Nickname != nil {
+		updates["nickname"] = strings.TrimSpace(*req.Nickname)
+	}
+	if req.IsAdmin != nil {
+		updates["is_admin"] = *req.IsAdmin
+	}
+	if req.Enabled != nil {
+		updates["enabled"] = *req.Enabled
+	}
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
+		return
+	}
+	if err := a.DB.Model(&target).Updates(updates).Error; err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			c.JSON(http.StatusConflict, gin.H{"error": "email already exists"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
+		return
+	}
+	if err := a.DB.First(&target, target.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"user": userResponse(&target)})
 }
 
 func (a *App) handleListCategories(c *gin.Context) {
@@ -685,6 +836,9 @@ func (a *App) completeOAuth(c *gin.Context, providerID, field string, updates ma
 		if err := a.DB.First(&u, flowState.UserID).Error; err != nil {
 			return fmt.Errorf("user not found")
 		}
+		if !u.Enabled {
+			return errors.New("user disabled")
+		}
 		var count int64
 		a.DB.Model(&models.User{}).Where(field+" = ? AND id <> ?", providerID, u.ID).Count(&count)
 		if count > 0 {
@@ -703,7 +857,7 @@ loginOrCreate:
 	var u models.User
 	if err := a.DB.Where(field+" = ?", providerID).First(&u).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			u = models.User{Email: email, Nickname: nickname}
+			u = models.User{Email: email, Nickname: nickname, Enabled: true}
 			for k, v := range updates {
 				switch k {
 				case "github_id":
@@ -719,6 +873,9 @@ loginOrCreate:
 			return fmt.Errorf("query user failed")
 		}
 	}
+	if !u.Enabled {
+		return errors.New("user disabled")
+	}
 	tok, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
 	a.setToken(c, tok)
 	c.Redirect(http.StatusFound, a.oauthRedirectURL(tok, currentFlowState, c.Query("redirect")))
@@ -731,6 +888,8 @@ func (a *App) respondOAuthError(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case "github account already bound", "google account already bound":
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case "user disabled":
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 	case "create user failed", "query user failed", "update user failed":
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	default:
@@ -755,7 +914,7 @@ func userResponse(u *models.User) gin.H {
 	if u == nil {
 		return nil
 	}
-	return gin.H{"id": u.ID, "email": u.Email, "nickname": u.Nickname, "is_admin": u.IsAdmin, "github_id": u.GitHubID, "google_id": u.GoogleID}
+	return gin.H{"id": u.ID, "email": u.Email, "nickname": u.Nickname, "enabled": u.Enabled, "is_admin": u.IsAdmin, "github_id": u.GitHubID, "google_id": u.GoogleID}
 }
 
 type gitHubUser struct {

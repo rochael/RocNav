@@ -10,6 +10,7 @@ type User struct {
 	TOTPSecret   string    `gorm:"size:64" json:"-"`
 	GitHubID     string    `gorm:"column:github_id;size:255" json:"github_id"`
 	GoogleID     string    `gorm:"column:google_id;size:255" json:"google_id"`
+	Enabled      bool      `gorm:"default:true" json:"enabled"`
 	IsAdmin      bool      `gorm:"default:false" json:"is_admin"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
