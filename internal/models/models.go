@@ -40,6 +40,20 @@ type Link struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+type Bookmark struct {
+	ID         uint       `gorm:"primaryKey" json:"id"`
+	UserID     uint       `gorm:"index;not null" json:"user_id"`
+	ClientUUID string     `gorm:"size:64;not null;index:idx_bookmarks_user_client,unique" json:"client_uuid"`
+	Title      string     `gorm:"size:255;not null" json:"title"`
+	URL        string     `gorm:"size:1024;not null" json:"url"`
+	GroupName  string     `gorm:"size:255;not null" json:"group_name"`
+	SortOrder  int        `gorm:"index" json:"sort_order"`
+	IsDeleted  bool       `gorm:"index" json:"is_deleted"`
+	DeletedAt  *time.Time `gorm:"index" json:"deleted_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
 type Click struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	LinkID    uint      `gorm:"index;not null" json:"link_id"`

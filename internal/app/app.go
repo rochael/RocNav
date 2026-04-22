@@ -21,7 +21,13 @@ type App struct {
 	OAuthGoogle *oauth2.Config
 	Router      *gin.Engine
 	rateStore   *rateLimiter
-	bindState   map[string]uint
+	oauthState  map[string]oauthFlowState
+}
+
+type oauthFlowState struct {
+	UserID   uint
+	Redirect string
+	Mode     string
 }
 
 func New() *App {
@@ -31,7 +37,7 @@ func New() *App {
 // NewWithConfig allows constructing the application with a pre-loaded configuration.
 func NewWithConfig(cfg *config.Config) *App {
 	db := database.Connect(cfg.DBPath)
-	database.MustMigrate(db, &models.User{}, &models.Category{}, &models.Link{}, &models.Click{})
+	database.MustMigrate(db, &models.User{}, &models.Category{}, &models.Link{}, &models.Bookmark{}, &models.Click{})
 	database.SeedAdmin(db, cfg.AdminEmail, cfg.AdminPassword, auth.HashPassword)
 
 	oauthCfg := &oauth2.Config{
@@ -54,7 +60,15 @@ func NewWithConfig(cfg *config.Config) *App {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
-	a := &App{Config: cfg, DB: db, OAuthGit: oauthCfg, OAuthGoogle: googleCfg, Router: r, rateStore: newRateLimiter(), bindState: make(map[string]uint)}
+	a := &App{
+		Config:      cfg,
+		DB:          db,
+		OAuthGit:    oauthCfg,
+		OAuthGoogle: googleCfg,
+		Router:      r,
+		rateStore:   newRateLimiter(),
+		oauthState:  make(map[string]oauthFlowState),
+	}
 	a.registerRoutes()
 	return a
 }

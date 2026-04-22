@@ -54,6 +54,9 @@ func (a *App) registerRoutes() {
 	a.Router.PUT("/api/links/reorder", a.authRequired(), a.handleReorderLinks)
 	a.Router.POST("/api/links/:id/click", a.handleClickLink)
 
+	a.Router.GET("/api/bookmarks/sync", a.authRequired(), a.handleGetBookmarkSync)
+	a.Router.POST("/api/bookmarks/sync", a.authRequired(), a.handlePostBookmarkSync)
+
 	// Static files for frontend (Embedded)
 	distFS, _ := web.GetDistFS()
 	indexBytes, err := fs.ReadFile(distFS, "index.html")
@@ -132,12 +135,24 @@ func (a *App) clearToken(c *gin.Context) {
 }
 
 func (a *App) handleMe(c *gin.Context) {
+	githubEnabled := a.OAuthGit != nil && strings.TrimSpace(a.OAuthGit.ClientID) != ""
+	googleEnabled := a.OAuthGoogle != nil && strings.TrimSpace(a.OAuthGoogle.ClientID) != ""
 	user, err := a.currentUser(c)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"user": nil, "allow_register": a.Config.AllowRegister})
+		c.JSON(http.StatusOK, gin.H{
+			"user":                 nil,
+			"allow_register":       a.Config.AllowRegister,
+			"github_oauth_enabled": githubEnabled,
+			"google_oauth_enabled": googleEnabled,
+		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": userResponse(user), "allow_register": a.Config.AllowRegister})
+	c.JSON(http.StatusOK, gin.H{
+		"user":                 userResponse(user),
+		"allow_register":       a.Config.AllowRegister,
+		"github_oauth_enabled": githubEnabled,
+		"google_oauth_enabled": googleEnabled,
+	})
 }
 
 func (a *App) handleRegister(c *gin.Context) {
@@ -180,7 +195,7 @@ func (a *App) handleRegister(c *gin.Context) {
 	}
 	token, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
 	a.setToken(c, token)
-	c.JSON(http.StatusOK, gin.H{"user": userResponse(&u), "totp_secret": secret, "totp_url": urlStr})
+	c.JSON(http.StatusOK, gin.H{"user": userResponse(&u), "token": token, "totp_secret": secret, "totp_url": urlStr})
 }
 
 func (a *App) handleLogin(c *gin.Context) {
@@ -216,7 +231,7 @@ func (a *App) handleLogin(c *gin.Context) {
 	}
 	token, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
 	a.setToken(c, token)
-	c.JSON(http.StatusOK, gin.H{"user": userResponse(&u)})
+	c.JSON(http.StatusOK, gin.H{"user": userResponse(&u), "token": token})
 }
 
 func (a *App) handleChangePassword(c *gin.Context) {
@@ -270,11 +285,16 @@ func (a *App) startOAuth(c *gin.Context, cfg *oauth2.Config, provider string) {
 		return
 	}
 	state := fmt.Sprintf("st_%d", time.Now().UnixNano())
+	flowState := oauthFlowState{
+		Redirect: strings.TrimSpace(c.Query("redirect")),
+		Mode:     strings.TrimSpace(c.Query("mode")),
+	}
 	if c.Query("bind") == "1" {
 		if u, err := a.currentUser(c); err == nil && u != nil {
-			a.bindState[state] = u.ID
+			flowState.UserID = u.ID
 		}
 	}
+	a.oauthState[state] = flowState
 	url := cfg.AuthCodeURL(state, oauth2.AccessTypeOnline)
 	c.JSON(http.StatusOK, gin.H{"url": url, "state": state})
 }
@@ -349,6 +369,32 @@ func (a *App) handleGoogleCallback(c *gin.Context) {
 	if err := a.completeOAuth(c, googleUser.ID, "google_id", updates, email, nickname, "google account already bound"); err != nil {
 		a.respondOAuthError(c, err)
 	}
+}
+
+func (a *App) oauthRedirectURL(token string, flowState oauthFlowState, fallbackRedirect string) string {
+	redirect := strings.TrimSpace(flowState.Redirect)
+	if redirect == "" {
+		redirect = strings.TrimSpace(fallbackRedirect)
+	}
+	if redirect == "" {
+		if flowState.Mode == "mobile" {
+			redirect = "rocnav://auth/github"
+		} else {
+			redirect = a.Config.FrontendOrigin
+		}
+	}
+	if flowState.Mode != "mobile" {
+		return redirect
+	}
+
+	parsed, err := url.Parse(redirect)
+	if err != nil {
+		return redirect
+	}
+	query := parsed.Query()
+	query.Set("token", token)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func (a *App) handleListCategories(c *gin.Context) {
@@ -625,10 +671,18 @@ func (a *App) handleClickLink(c *gin.Context) {
 
 func (a *App) completeOAuth(c *gin.Context, providerID, field string, updates map[string]any, email, nickname, boundErr string) error {
 	state := c.Query("state")
-	if uid, ok := a.bindState[state]; ok {
-		delete(a.bindState, state)
+	currentFlowState := oauthFlowState{
+		Redirect: strings.TrimSpace(c.Query("redirect")),
+		Mode:     strings.TrimSpace(c.Query("mode")),
+	}
+	if flowState, ok := a.oauthState[state]; ok {
+		currentFlowState = flowState
+		delete(a.oauthState, state)
+		if flowState.UserID == 0 {
+			goto loginOrCreate
+		}
 		var u models.User
-		if err := a.DB.First(&u, uid).Error; err != nil {
+		if err := a.DB.First(&u, flowState.UserID).Error; err != nil {
 			return fmt.Errorf("user not found")
 		}
 		var count int64
@@ -641,13 +695,11 @@ func (a *App) completeOAuth(c *gin.Context, providerID, field string, updates ma
 		}
 		tok, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
 		a.setToken(c, tok)
-		redirect := c.Query("redirect")
-		if redirect == "" {
-			redirect = a.Config.FrontendOrigin
-		}
-		c.Redirect(http.StatusFound, redirect)
+		c.Redirect(http.StatusFound, a.oauthRedirectURL(tok, flowState, c.Query("redirect")))
 		return nil
 	}
+
+loginOrCreate:
 	var u models.User
 	if err := a.DB.Where(field+" = ?", providerID).First(&u).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -669,11 +721,7 @@ func (a *App) completeOAuth(c *gin.Context, providerID, field string, updates ma
 	}
 	tok, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
 	a.setToken(c, tok)
-	redirect := c.Query("redirect")
-	if redirect == "" {
-		redirect = a.Config.FrontendOrigin
-	}
-	c.Redirect(http.StatusFound, redirect)
+	c.Redirect(http.StatusFound, a.oauthRedirectURL(tok, currentFlowState, c.Query("redirect")))
 	return nil
 }
 

@@ -8,3 +8,62 @@ data/
 node_modules
 dist
 .gstack/
+
+# macOS
+.DS_Store
+
+# iOS / Xcode
+DerivedData/
+.build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+
+# CocoaPods
+Pods/
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+
+# Carthage
+Carthage/Build/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Android / IntelliJ
+.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.keystore
+*.jks
+*.hprof
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+out/
+
+# Android build outputs
+**/build/
