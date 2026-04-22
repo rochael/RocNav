@@ -38,6 +38,8 @@ func (a *App) registerRoutes() {
 	a.Router.GET("/api/auth/totp", a.authRequired(), a.handleTOTPInfo)
 	a.Router.GET("/api/auth/github/start", a.handleGitHubStart)
 	a.Router.GET("/api/auth/github/callback", a.handleGitHubCallback)
+	a.Router.GET("/api/auth/google/start", a.handleGoogleStart)
+	a.Router.GET("/api/auth/google/callback", a.handleGoogleCallback)
 
 	a.Router.GET("/api/categories", a.handleListCategories)
 	a.Router.POST("/api/categories", a.authRequired(), a.handleCreateCategory)
@@ -262,9 +264,9 @@ func (a *App) handleTOTPInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"secret": user.TOTPSecret, "url": urlStr})
 }
 
-func (a *App) handleGitHubStart(c *gin.Context) {
-	if a.OAuthGit == nil || a.OAuthGit.ClientID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "github oauth not configured"})
+func (a *App) startOAuth(c *gin.Context, cfg *oauth2.Config, provider string) {
+	if cfg == nil || cfg.ClientID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": provider + " oauth not configured"})
 		return
 	}
 	state := fmt.Sprintf("st_%d", time.Now().UnixNano())
@@ -273,8 +275,16 @@ func (a *App) handleGitHubStart(c *gin.Context) {
 			a.bindState[state] = u.ID
 		}
 	}
-	url := a.OAuthGit.AuthCodeURL(state, oauth2.AccessTypeOnline)
+	url := cfg.AuthCodeURL(state, oauth2.AccessTypeOnline)
 	c.JSON(http.StatusOK, gin.H{"url": url, "state": state})
+}
+
+func (a *App) handleGitHubStart(c *gin.Context) {
+	a.startOAuth(c, a.OAuthGit, "github")
+}
+
+func (a *App) handleGoogleStart(c *gin.Context) {
+	a.startOAuth(c, a.OAuthGoogle, "google")
 }
 
 func (a *App) handleGitHubCallback(c *gin.Context) {
@@ -300,53 +310,45 @@ func (a *App) handleGitHubCallback(c *gin.Context) {
 	if email == "" {
 		email = fmt.Sprintf("github_%d@users.noreply.github.com", ghUser.ID)
 	}
-	state := c.Query("state")
-	if uid, ok := a.bindState[state]; ok {
-		delete(a.bindState, state)
-		var u models.User
-		if err := a.DB.First(&u, uid).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "user not found"})
-			return
-		}
-		ghID := fmt.Sprintf("%d", ghUser.ID)
-		// ensure not bound to others
-		var count int64
-		a.DB.Model(&models.User{}).Where("github_id = ? AND id <> ?", ghID, u.ID).Count(&count)
-		if count > 0 {
-			c.JSON(http.StatusConflict, gin.H{"error": "github account already bound"})
-			return
-		}
-		a.DB.Model(&u).Updates(map[string]any{"github_id": ghID, "nickname": u.Nickname})
-		tok, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
-		a.setToken(c, tok)
-		redirect := c.Query("redirect")
-		if redirect == "" {
-			redirect = a.Config.FrontendOrigin
-		}
-		c.Redirect(http.StatusFound, redirect)
+	ghID := fmt.Sprintf("%d", ghUser.ID)
+	updates := map[string]any{"github_id": ghID}
+	if err := a.completeOAuth(c, ghID, "github_id", updates, strings.ToLower(email), ghUser.Login, "github account already bound"); err != nil {
+		a.respondOAuthError(c, err)
+	}
+}
+
+func (a *App) handleGoogleCallback(c *gin.Context) {
+	if a.OAuthGoogle == nil || a.OAuthGoogle.ClientID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "google oauth not configured"})
 		return
 	}
-	var u models.User
-	ghID := fmt.Sprintf("%d", ghUser.ID)
-	if err := a.DB.Where("github_id = ?", ghID).First(&u).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			u = models.User{GitHubID: ghID, Email: strings.ToLower(email), Nickname: ghUser.Login}
-			if err := a.DB.Create(&u).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "create user failed"})
-				return
-			}
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "query user failed"})
-			return
-		}
+	code := c.Query("code")
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing code"})
+		return
 	}
-	tok, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
-	a.setToken(c, tok)
-	redirect := c.Query("redirect")
-	if redirect == "" {
-		redirect = a.Config.FrontendOrigin
+	token, err := a.OAuthGoogle.Exchange(c, code)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "exchange failed"})
+		return
 	}
-	c.Redirect(http.StatusFound, redirect)
+	googleUser, err := fetchGoogleUser(c, token)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "google user fetch failed"})
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(googleUser.Email))
+	if email == "" {
+		email = fmt.Sprintf("google_%s@users.noreply.local", googleUser.ID)
+	}
+	nickname := strings.TrimSpace(googleUser.Name)
+	if nickname == "" {
+		nickname = strings.TrimSpace(googleUser.Email)
+	}
+	updates := map[string]any{"google_id": googleUser.ID}
+	if err := a.completeOAuth(c, googleUser.ID, "google_id", updates, email, nickname, "google account already bound"); err != nil {
+		a.respondOAuthError(c, err)
+	}
 }
 
 func (a *App) handleListCategories(c *gin.Context) {
@@ -621,6 +623,73 @@ func (a *App) handleClickLink(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+func (a *App) completeOAuth(c *gin.Context, providerID, field string, updates map[string]any, email, nickname, boundErr string) error {
+	state := c.Query("state")
+	if uid, ok := a.bindState[state]; ok {
+		delete(a.bindState, state)
+		var u models.User
+		if err := a.DB.First(&u, uid).Error; err != nil {
+			return fmt.Errorf("user not found")
+		}
+		var count int64
+		a.DB.Model(&models.User{}).Where(field+" = ? AND id <> ?", providerID, u.ID).Count(&count)
+		if count > 0 {
+			return errors.New(boundErr)
+		}
+		if err := a.DB.Model(&u).Updates(updates).Error; err != nil {
+			return fmt.Errorf("update user failed")
+		}
+		tok, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
+		a.setToken(c, tok)
+		redirect := c.Query("redirect")
+		if redirect == "" {
+			redirect = a.Config.FrontendOrigin
+		}
+		c.Redirect(http.StatusFound, redirect)
+		return nil
+	}
+	var u models.User
+	if err := a.DB.Where(field+" = ?", providerID).First(&u).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			u = models.User{Email: email, Nickname: nickname}
+			for k, v := range updates {
+				switch k {
+				case "github_id":
+					u.GitHubID = v.(string)
+				case "google_id":
+					u.GoogleID = v.(string)
+				}
+			}
+			if err := a.DB.Create(&u).Error; err != nil {
+				return fmt.Errorf("create user failed")
+			}
+		} else {
+			return fmt.Errorf("query user failed")
+		}
+	}
+	tok, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
+	a.setToken(c, tok)
+	redirect := c.Query("redirect")
+	if redirect == "" {
+		redirect = a.Config.FrontendOrigin
+	}
+	c.Redirect(http.StatusFound, redirect)
+	return nil
+}
+
+func (a *App) respondOAuthError(c *gin.Context, err error) {
+	switch err.Error() {
+	case "user not found":
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case "github account already bound", "google account already bound":
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case "create user failed", "query user failed", "update user failed":
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	}
+}
+
 func ownsOrAdmin(u *models.User, ownerID *uint) bool {
 	if u == nil {
 		return false
@@ -638,13 +707,19 @@ func userResponse(u *models.User) gin.H {
 	if u == nil {
 		return nil
 	}
-	return gin.H{"id": u.ID, "email": u.Email, "nickname": u.Nickname, "is_admin": u.IsAdmin, "github_id": u.GitHubID}
+	return gin.H{"id": u.ID, "email": u.Email, "nickname": u.Nickname, "is_admin": u.IsAdmin, "github_id": u.GitHubID, "google_id": u.GoogleID}
 }
 
 type gitHubUser struct {
 	ID    int64  `json:"id"`
 	Login string `json:"login"`
 	Email string `json:"email"`
+}
+
+type googleUser struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
 }
 
 func fetchGitHubUser(c *gin.Context, token *oauth2.Token) (*gitHubUser, string, error) {
@@ -675,6 +750,15 @@ func fetchGitHubUser(c *gin.Context, token *oauth2.Token) (*gitHubUser, string, 
 	return &user, email, nil
 }
 
+func fetchGoogleUser(c *gin.Context, token *oauth2.Token) (*googleUser, error) {
+	client := oauth2.NewClient(c, oauth2.StaticTokenSource(token))
+	var user googleUser
+	if err := getJSON(client, "https://www.googleapis.com/oauth2/v2/userinfo", &user); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func getJSON(client *http.Client, url string, dest any) error {
 	resp, err := client.Get(url)
 	if err != nil {
@@ -682,7 +766,7 @@ func getJSON(client *http.Client, url string, dest any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("github status %d", resp.StatusCode)
+		return fmt.Errorf("oauth status %d", resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(dest)
 }

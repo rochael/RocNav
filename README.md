@@ -29,6 +29,7 @@ make build-linux                 # 输出 bin/server-linux
 - `COOKIE_DOMAIN` / `COOKIE_SECURE`：Cookie 域与安全标记。
 - `FRONTEND_ORIGIN`（默认`http://localhost:5173`）：开发时 CORS 允许源。
 - GitHub OAuth：`GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET`、`GITHUB_REDIRECT`。
+- Google OAuth：`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REDIRECT`。
 - 管理员种子：`ADMIN_EMAIL`、`ADMIN_PASSWORD`。
 
 ## 版本号

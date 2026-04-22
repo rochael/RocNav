@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BrowserRouter, Link, Route, Routes, useLocation } from 'react-router-dom'
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd'
 import './App.css'
 
-type User = { id: number; email: string; nickname?: string; is_admin: boolean; github_id?: string }
+type User = { id: number; email: string; nickname?: string; is_admin: boolean; github_id?: string; google_id?: string }
 type Category = { id: number; name: string; description?: string; sort_order: number }
 type LinkItem = { id: number; category_id: number; title: string; url: string; is_public: boolean; sort_order: number; icon_url?: string; click_count?: number; remark?: string }
 
@@ -47,12 +47,40 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!text) return {} as T
   try {
     return JSON.parse(text)
-  } catch (e) {
+  } catch {
     throw new Error('响应不是有效的 JSON，请检查后端是否启动或代理配置')
   }
 }
 
 type AppConfig = { allow_register: boolean }
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error) || !error.message) return fallback
+
+  const raw = error.message.trim()
+  try {
+    const parsed = JSON.parse(raw) as { error?: string; message?: string }
+    const serverMessage = (parsed.error || parsed.message || '').trim()
+    if (!serverMessage) return fallback
+
+    switch (serverMessage) {
+      case 'invalid credentials':
+        return '邮箱、密码或 OTP 不正确'
+      case 'email and password required':
+        return '请输入邮箱和密码'
+      case 'otp required':
+        return '请输入 OTP 验证码'
+      case 'nickname required':
+        return '请输入昵称'
+      case 'email already exists':
+        return '该邮箱已被注册'
+      default:
+        return serverMessage
+    }
+  } catch {
+    return raw || fallback
+  }
+}
 
 function useAppData() {
   const [user, setUser] = useState<User | null>(null)
@@ -62,7 +90,7 @@ function useAppData() {
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState<string | null>(null)
 
-  const loadAll = async () => {
+  const loadAll = useCallback(async () => {
     setLoading(true)
     try {
       const me = await api<{ user: User | null; allow_register?: boolean }>('/api/auth/me')
@@ -70,8 +98,8 @@ function useAppData() {
       if (typeof me.allow_register === 'boolean') {
         setConfigState({ allow_register: me.allow_register })
       }
-    } catch (e) {
-      console.error(e)
+    } catch (error) {
+      console.error(error)
       setUser(null)
     }
     try {
@@ -79,16 +107,19 @@ function useAppData() {
       setCategories((cs.categories || []).filter((c) => c && typeof c.id !== 'undefined'))
       const ls = await api<{ links: LinkItem[] }>('/api/links')
       setLinks((ls.links || []).filter((l) => l && typeof l.id !== 'undefined'))
-    } catch (e) {
-      console.error(e)
-      setMessage('加载数据失败')
+      setMessage(null)
+    } catch (error) {
+      console.error(error)
+      setMessage('暂时无法同步最新数据，你仍然可以先登录后台后再重试。')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
-  }
+  }, [])
 
   useEffect(() => {
-    void loadAll()
-  }, [])
+    const promise = loadAll()
+    void promise
+  }, [loadAll])
 
   return { user, setUser, categories, setCategories, links, setLinks, loading, message, setMessage, loadAll, configState }
 }
@@ -184,6 +215,7 @@ function AdminPage({
   setUser,
   allowRegister,
   onBindGitHub,
+  onBindGoogle,
   categories,
   setCategories,
   links,
@@ -196,6 +228,7 @@ function AdminPage({
   setUser: (u: User | null) => void
   allowRegister: boolean
   onBindGitHub: () => Promise<void>
+  onBindGoogle: () => Promise<void>
   categories: Category[]
   setCategories: (v: Category[]) => void
   links: LinkItem[]
@@ -216,10 +249,10 @@ function AdminPage({
   const [pwdForm, setPwdForm] = useState({ old_password: '', new_password: '', confirm: '' })
   const [profileLoading, setProfileLoading] = useState(false)
 
-  const showMessage = (msg: string) => {
+  const showMessage = useCallback((msg: string) => {
     setMessage(msg)
     setTimeout(() => setMessage(null), 3000)
-  }
+  }, [setMessage])
 
   const handleEditCategory = (cat: Category) => {
     setEditingCategory(cat)
@@ -233,8 +266,8 @@ function AdminPage({
       showMessage('分类已更新')
       setEditingCategory(null)
       await loadAll()
-    } catch (e: any) {
-      showMessage(e.message || '更新分类失败')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '更新分类失败'))
     }
   }
 
@@ -244,8 +277,8 @@ function AdminPage({
       await api(`/api/categories/${cat.id}`, { method: 'DELETE' })
       showMessage('分类已删除')
       await loadAll()
-    } catch (e: any) {
-      showMessage(e.message || '删除分类失败')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '删除分类失败'))
     }
   }
 
@@ -261,8 +294,8 @@ function AdminPage({
       showMessage('链接已更新')
       setEditingLink(null)
       await loadAll()
-    } catch (e: any) {
-      showMessage(e.message || '更新链接失败')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '更新链接失败'))
     }
   }
 
@@ -272,8 +305,8 @@ function AdminPage({
       await api(`/api/links/${link.id}`, { method: 'DELETE' })
       showMessage('链接已删除')
       await loadAll()
-    } catch (e: any) {
-      showMessage(e.message || '删除链接失败')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '删除链接失败'))
     }
   }
 
@@ -297,8 +330,8 @@ function AdminPage({
         showMessage('登录成功')
       }
       await loadAll()
-    } catch (e: any) {
-      showMessage(e.message || '认证失败')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '认证失败'))
     }
   }
 
@@ -317,8 +350,8 @@ function AdminPage({
       await api('/api/auth/password', { method: 'POST', body: JSON.stringify({ old_password: pwdForm.old_password, new_password: pwdForm.new_password }) })
       showMessage('密码已更新')
       setPwdForm({ old_password: '', new_password: '', confirm: '' })
-    } catch (e: any) {
-      showMessage(e.message || '修改密码失败')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '修改密码失败'))
     }
   }
 
@@ -326,22 +359,31 @@ function AdminPage({
     try {
       const res = await api<{ url: string }>('/api/auth/github/start')
       window.location.href = res.url
-    } catch (e: any) {
-      showMessage(e.message || 'GitHub 登录配置缺失')
+    } catch (error) {
+      showMessage(getErrorMessage(error, 'GitHub 登录配置缺失'))
     }
   }
 
-  const loadTotp = async () => {
+  const handleGoogleLogin = async () => {
+    try {
+      const res = await api<{ url: string }>('/api/auth/google/start')
+      window.location.href = res.url
+    } catch (error) {
+      showMessage(getErrorMessage(error, 'Google 登录配置缺失'))
+    }
+  }
+
+  const loadTotp = useCallback(async () => {
     setProfileLoading(true)
     try {
       const res = await api<{ secret: string; url: string }>('/api/auth/totp')
       setTotpInfo(res)
-    } catch (e: any) {
-      showMessage(e.message || '获取 TOTP 失败')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '获取 TOTP 失败'))
     } finally {
       setProfileLoading(false)
     }
-  }
+  }, [showMessage])
 
   useEffect(() => {
     if (!allowRegister && authMode === 'register') {
@@ -353,7 +395,7 @@ function AdminPage({
     if (tab === 'profile' && user) {
       void loadTotp()
     }
-  }, [tab, user])
+  }, [loadTotp, tab, user])
 
   const handleCreateCategory = async () => {
     try {
@@ -361,8 +403,8 @@ function AdminPage({
       setCategoryForm({ name: '', description: '', sort_order: 0 })
       showMessage('分类已创建')
       await loadAll()
-    } catch (e: any) {
-      showMessage(e.message || '创建分类失败')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '创建分类失败'))
     }
   }
 
@@ -373,8 +415,8 @@ function AdminPage({
       setLinkForm({ category_id: '', title: '', url: '', is_public: true, sort_order: 0, icon_url: '', remark: '' })
       showMessage('链接已创建')
       await loadAll()
-    } catch (e: any) {
-      showMessage(e.message || '创建链接失败')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '创建链接失败'))
     }
   }
 
@@ -388,8 +430,8 @@ function AdminPage({
       setCategories(reordered)
       try {
         await api('/api/categories/reorder', { method: 'PUT', body: JSON.stringify(reordered.map((c) => ({ id: c.id, sort_order: c.sort_order }))) })
-      } catch (e: any) {
-        showMessage(e.message || '分类排序失败')
+      } catch (error) {
+        showMessage(getErrorMessage(error, '分类排序失败'))
       }
       return
     }
@@ -404,8 +446,8 @@ function AdminPage({
       setLinks([...others, ...reordered])
       try {
         await api('/api/links/reorder', { method: 'PUT', body: JSON.stringify(reordered.map((l) => ({ id: l.id, sort_order: l.sort_order }))) })
-      } catch (e: any) {
-        showMessage(e.message || '链接排序失败')
+      } catch (error) {
+        showMessage(getErrorMessage(error, '链接排序失败'))
       }
     }
   }
@@ -461,34 +503,80 @@ function AdminPage({
       )}
 
       <div className="space-y-4">
-        {message && <div className="rounded-lg bg-accent/10 px-3 py-2 text-sm text-accent">{message}</div>}
+        {message && (
+          <div className={`rounded-lg px-3 py-2 text-sm ${user ? 'bg-accent/10 text-accent' : 'border border-amber-200 bg-amber-50 text-amber-700'}`}>
+            {message}
+          </div>
+        )}
         {!user && (
-          <div id="admin-account" className="rounded-2xl bg-white p-6 shadow-lg">
-            <h3 className="mb-4 text-xl font-bold text-gray-800">账号</h3>
-            <div className="grid gap-4 md:grid-cols-2">
-              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="邮箱" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} />
-              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="密码" type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} />
-              {allowRegister && authMode === 'register' && (
-                <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="昵称" value={authForm.nickname} onChange={(e) => setAuthForm({ ...authForm, nickname: e.target.value })} />
-              )}
-              {authMode === 'login' && (
-                <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="一次性验证码" value={authForm.otp} onChange={(e) => setAuthForm({ ...authForm, otp: e.target.value })} />
-              )}
-            </div>
-            <div className="mt-4 flex gap-3">
-              <button onClick={handleAuthSubmit} className="rounded-lg bg-accent px-4 py-2 text-sm text-white shadow-card">{authMode === 'register' ? '注册' : '登录'}</button>
-              <button onClick={handleGitHubLogin} className="rounded-lg bg-black px-4 py-2 text-sm text-white shadow-card">GitHub 登录</button>
-              {allowRegister && (
-                <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="rounded-lg bg-bodybg px-3 py-2 text-sm shadow-card">切换到 {authMode === 'login' ? '注册' : '登录'}</button>
-              )}
-            </div>
-            {totpInfo && (
-              <div className="mt-3 rounded-lg bg-bodybg p-3 text-xs text-gray-600">
-                <div>请在 Google Authenticator 中添加：</div>
-                <div className="font-mono break-all text-gray-800">{totpInfo.secret}</div>
-                <div className="font-mono break-all text-gray-800">{totpInfo.url}</div>
+          <div className="relative overflow-hidden rounded-[28px] border border-white/70 bg-white/95 p-6 shadow-[0_24px_60px_rgba(74,144,226,0.12)] backdrop-blur sm:p-8">
+            <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-accent/50 to-transparent" />
+            <div className="pointer-events-none absolute -right-20 -top-24 h-52 w-52 rounded-full bg-accent/10 blur-3xl" />
+            <div className="pointer-events-none absolute -left-24 bottom-0 h-44 w-44 rounded-full bg-sky-100/70 blur-3xl" />
+
+            <div id="admin-account" className="relative mx-auto max-w-md">
+              <div className="mb-8 space-y-3 text-center">
+                <div className="inline-flex items-center rounded-full border border-accent/15 bg-accent/10 px-3 py-1 text-[11px] font-semibold tracking-[0.28em] text-accent">ROC NAV ADMIN</div>
+                <div className="space-y-2">
+                  <h3 className="text-3xl font-semibold tracking-[0.08em] text-gray-800">登录后台</h3>
+                  <p className="text-sm leading-6 text-gray-500">管理分类、维护链接和个人设置。使用你的账号密码与动态验证码登录。</p>
+                </div>
               </div>
-            )}
+
+              <div className="space-y-4">
+                <input className="w-full rounded-2xl border border-gray-200 bg-white/90 px-4 py-3 text-sm text-gray-700 outline-none transition-all placeholder:text-gray-400 focus:border-accent focus:ring-2 focus:ring-accent/20" placeholder="邮箱" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} />
+                <input className="w-full rounded-2xl border border-gray-200 bg-white/90 px-4 py-3 text-sm text-gray-700 outline-none transition-all placeholder:text-gray-400 focus:border-accent focus:ring-2 focus:ring-accent/20" placeholder="密码" type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} />
+                {allowRegister && authMode === 'register' && (
+                  <input className="w-full rounded-2xl border border-gray-200 bg-white/90 px-4 py-3 text-sm text-gray-700 outline-none transition-all placeholder:text-gray-400 focus:border-accent focus:ring-2 focus:ring-accent/20" placeholder="昵称" value={authForm.nickname} onChange={(e) => setAuthForm({ ...authForm, nickname: e.target.value })} />
+                )}
+                {authMode === 'login' && (
+                  <input className="w-full rounded-2xl border border-gray-200 bg-white/90 px-4 py-3 text-sm text-gray-700 outline-none transition-all placeholder:text-gray-400 focus:border-accent focus:ring-2 focus:ring-accent/20" placeholder="一次性验证码（OTP）" value={authForm.otp} onChange={(e) => setAuthForm({ ...authForm, otp: e.target.value })} />
+                )}
+              </div>
+
+              <div className="mt-6 space-y-3">
+                <button onClick={handleAuthSubmit} className="w-full rounded-2xl bg-accent px-4 py-3 text-sm font-medium tracking-[0.12em] text-white shadow-[0_18px_30px_rgba(74,144,226,0.24)] transition-all hover:-translate-y-0.5 hover:bg-[#3f83d2]">{authMode === 'register' ? '立即注册' : '进入后台'}</button>
+                {allowRegister && (
+                  <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="w-full rounded-2xl border border-gray-200 bg-bodybg/80 px-4 py-3 text-sm font-medium text-gray-600 transition-colors hover:border-accent/30 hover:text-accent">切换到 {authMode === 'login' ? '注册' : '登录'}</button>
+                )}
+              </div>
+
+              <div className="my-6 flex items-center gap-4 text-xs tracking-[0.24em] text-gray-400">
+                <div className="h-px flex-1 bg-gradient-to-r from-transparent to-gray-200" />
+                <span>第三方登录</span>
+                <div className="h-px flex-1 bg-gradient-to-l from-transparent to-gray-200" />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  onClick={handleGoogleLogin}
+                  className="flex w-full items-center justify-center gap-3 rounded-2xl border border-[#dadce0] bg-white px-4 py-3 text-sm font-medium text-[#3c4043] shadow-[0_1px_2px_rgba(60,64,67,0.15)] transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_10px_rgba(60,64,67,0.18)]"
+                >
+                  <span className="flex h-5 w-5 items-center justify-center">
+                    <svg viewBox="0 0 18 18" className="h-5 w-5" aria-hidden="true">
+                      <path fill="#EA4335" d="M9 7.364v3.517h4.887c-.215 1.131-.859 2.089-1.827 2.733l2.955 2.295c1.722-1.586 2.713-3.924 2.713-6.709 0-.643-.058-1.26-.164-1.836H9Z" />
+                      <path fill="#4285F4" d="M9 18c2.43 0 4.468-.806 5.957-2.191l-2.955-2.295c-.806.542-1.836.864-3.002.864-2.302 0-4.252-1.554-4.949-3.635H.999v2.37A9 9 0 0 0 9 18Z" />
+                      <path fill="#FBBC05" d="M4.051 10.743A5.41 5.41 0 0 1 3.776 9c0-.605.106-1.186.275-1.743V4.887H.999A9 9 0 0 0 0 9c0 1.447.346 2.814.999 4.113l3.052-2.37Z" />
+                      <path fill="#34A853" d="M9 3.622c1.321 0 2.506.454 3.438 1.342l2.58-2.58C13.464.942 11.426 0 9 0A9 9 0 0 0 .999 4.887l3.052 2.37C4.748 5.176 6.698 3.622 9 3.622Z" />
+                    </svg>
+                  </span>
+                  <span>Sign in with Google</span>
+                </button>
+                <button onClick={handleGitHubLogin} className="flex w-full items-center justify-center gap-3 rounded-2xl border border-gray-900 bg-gray-950 px-4 py-3 text-sm font-medium text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-black">
+                  <span className="text-base">◎</span>
+                  GitHub
+                </button>
+              </div>
+
+              {totpInfo && (
+                <div className="mt-5 rounded-2xl border border-accent/15 bg-accent/5 p-4 text-xs text-gray-600">
+                  <div className="mb-2 text-[11px] font-semibold tracking-[0.22em] text-accent">TOTP SETUP</div>
+                  <div>请在 Google Authenticator 中添加：</div>
+                  <div className="mt-2 font-mono break-all text-gray-800">{totpInfo.secret}</div>
+                  <div className="mt-1 font-mono break-all text-gray-800">{totpInfo.url}</div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       {user && tab === 'categories' && (
@@ -655,23 +743,58 @@ function AdminPage({
                 <button onClick={handleChangePassword} className="w-full rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-opacity-90">保存密码</button>
               </div>
 
-              <div className="space-y-3 rounded-xl border border-gray-100 p-4">
-                <div className="text-sm font-semibold text-gray-800">GitHub 绑定</div>
-                {user.github_id ? (
-                  <div className="text-xs text-green-600">已绑定 GitHub (ID: {user.github_id})</div>
-                ) : (
-                  <>
-                    <p className="text-xs text-gray-500">绑定后可使用 GitHub 登录。</p>
+              <div className="space-y-4 rounded-xl border border-gray-100 p-4">
+                <div className="text-sm font-semibold text-gray-800">第三方账号绑定</div>
+                <div className="space-y-3 rounded-lg border border-gray-100 bg-gray-50/80 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-gray-700">Google</div>
+                      <p className="text-xs text-gray-500">绑定后可使用 Google 登录。</p>
+                    </div>
+                    {user.google_id ? <span className="rounded-full bg-green-50 px-2 py-1 text-[11px] text-green-600">已绑定</span> : <span className="rounded-full bg-gray-100 px-2 py-1 text-[11px] text-gray-500">未绑定</span>}
+                  </div>
+                  {user.google_id ? (
+                    <div className="text-xs text-green-600 break-all">Google ID: {user.google_id}</div>
+                  ) : (
+                    <button onClick={onBindGoogle} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:border-gray-300 hover:bg-gray-50">绑定 Google</button>
+                  )}
+                </div>
+                <div className="space-y-3 rounded-lg border border-gray-100 bg-gray-50/80 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-gray-700">GitHub</div>
+                      <p className="text-xs text-gray-500">绑定后可使用 GitHub 登录。</p>
+                    </div>
+                    {user.github_id ? <span className="rounded-full bg-green-50 px-2 py-1 text-[11px] text-green-600">已绑定</span> : <span className="rounded-full bg-gray-100 px-2 py-1 text-[11px] text-gray-500">未绑定</span>}
+                  </div>
+                  {user.github_id ? (
+                    <div className="text-xs text-green-600 break-all">GitHub ID: {user.github_id}</div>
+                  ) : (
                     <button onClick={onBindGitHub} className="w-full rounded-lg bg-black px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-gray-900">绑定 GitHub</button>
-                  </>
-                )}
+                  )}
+                </div>
               </div>
             </div>
 
             <div className="mt-6 space-y-3 rounded-xl border border-gray-100 p-4">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold text-gray-800">TOTP</div>
-                <button onClick={async () => { setProfileLoading(true); try { const res = await api<{ secret: string; url: string }>('/api/auth/totp'); setTotpInfo(res); } catch (e: any) { showMessage(e.message || '获取 TOTP 失败'); } finally { setProfileLoading(false); } }} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-opacity-90">刷新</button>
+                <button
+                  onClick={async () => {
+                    setProfileLoading(true)
+                    try {
+                      const res = await api<{ secret: string; url: string }>('/api/auth/totp')
+                      setTotpInfo(res)
+                    } catch (error) {
+                      showMessage(getErrorMessage(error, '获取 TOTP 失败'))
+                    } finally {
+                      setProfileLoading(false)
+                    }
+                  }}
+                  className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-opacity-90"
+                >
+                  刷新
+                </button>
               </div>
               {profileLoading && <div className="text-xs text-gray-500">加载中...</div>}
               {totpInfo && (
@@ -797,29 +920,33 @@ function AdminPage({
 function Header({ user, onLogout }: { user: User | null; onLogout: () => void }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const { pathname } = useLocation()
-  
+  const showLoginLink = !user && pathname === '/'
+
   return (
     <header className="mb-6 flex items-center justify-end gap-3">
-      {!user ? (
-        <Link to="/admin" className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-opacity-90 transition-all">登录</Link>
-      ) : (
+      {showLoginLink && (
+        <Link to="/admin" className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-gray-200 hover:bg-gray-50">
+          登录
+        </Link>
+      )}
+      {user && (
         <>
           {pathname !== '/' && (
             <Link to="/" className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-gray-200 hover:bg-gray-50">返回首页</Link>
           )}
           <div className="relative">
-            <button 
-              onClick={() => setIsMenuOpen(!isMenuOpen)} 
-              className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 transition-colors"
+            <button
+              onClick={() => setIsMenuOpen((open) => !open)}
+              className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
             >
               {user.nickname || user.email}
               <svg className={`h-4 w-4 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
             </button>
             {isMenuOpen && (
-              <div className="absolute right-0 mt-2 w-32 rounded-lg bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 z-50 animate-in fade-in zoom-in duration-200">
+              <div className="absolute right-0 z-50 mt-2 w-32 rounded-lg bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 animate-in fade-in zoom-in duration-200">
                 <Link to="/admin#admin-account" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => setIsMenuOpen(false)}>个人信息</Link>
                 <Link to="/admin" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => setIsMenuOpen(false)}>设置</Link>
-                <button onClick={() => { setIsMenuOpen(false); onLogout() }} className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50">退出</button>
+                <button onClick={() => { setIsMenuOpen(false); onLogout() }} className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50">退出</button>
               </div>
             )}
           </div>
@@ -835,8 +962,8 @@ function App() {
   const handleLinkClick = async (link: LinkItem) => {
     try {
       await api(`/api/links/${link.id}/click`, { method: 'POST' })
-    } catch (e) {
-      console.error(e)
+    } catch (error) {
+      console.error(error)
     }
   }
 
@@ -849,8 +976,17 @@ function App() {
     try {
       const res = await api<{ url: string }>('/api/auth/github/start?bind=1')
       window.location.href = res.url
-    } catch (e) {
-      console.error(e)
+    } catch (error) {
+      console.error(error)
+    }
+  }
+
+  const handleBindGoogle = async () => {
+    try {
+      const res = await api<{ url: string }>('/api/auth/google/start?bind=1')
+      window.location.href = res.url
+    } catch (error) {
+      console.error(error)
     }
   }
 
@@ -872,6 +1008,7 @@ function App() {
                   setUser={data.setUser}
                   allowRegister={data.configState.allow_register}
                   onBindGitHub={handleBindGitHub}
+                  onBindGoogle={handleBindGoogle}
                   categories={data.categories}
                   setCategories={data.setCategories}
                   links={data.links}

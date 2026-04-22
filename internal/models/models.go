@@ -8,7 +8,8 @@ type User struct {
 	PasswordHash string    `gorm:"size:255" json:"-"`
 	Nickname     string    `gorm:"size:255" json:"nickname"`
 	TOTPSecret   string    `gorm:"size:64" json:"-"`
-    GitHubID     string    `gorm:"column:github_id;size:255" json:"github_id"`
+	GitHubID     string    `gorm:"column:github_id;size:255" json:"github_id"`
+	GoogleID     string    `gorm:"column:google_id;size:255" json:"google_id"`
 	IsAdmin      bool      `gorm:"default:false" json:"is_admin"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`

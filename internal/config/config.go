@@ -21,6 +21,9 @@ type Config struct {
 	GitHubClientID string
 	GitHubSecret   string
 	GitHubRedirect string
+	GoogleClientID string
+	GoogleSecret   string
+	GoogleRedirect string
 	AdminEmail     string
 	AdminPassword  string
 	AllowRegister  bool
@@ -40,6 +43,9 @@ func Load() *Config {
 		GitHubClientID: os.Getenv("GITHUB_CLIENT_ID"),
 		GitHubSecret:   os.Getenv("GITHUB_CLIENT_SECRET"),
 		GitHubRedirect: getenv("GITHUB_REDIRECT", "http://localhost:8080/api/auth/github/callback"),
+		GoogleClientID: os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleSecret:   os.Getenv("GOOGLE_CLIENT_SECRET"),
+		GoogleRedirect: getenv("GOOGLE_REDIRECT", "http://localhost:8080/api/auth/google/callback"),
 		AdminEmail:     os.Getenv("ADMIN_EMAIL"),
 		AdminPassword:  os.Getenv("ADMIN_PASSWORD"),
 		AllowRegister:  boolEnv("ALLOW_REGISTER", true),

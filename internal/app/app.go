@@ -15,12 +15,13 @@ import (
 )
 
 type App struct {
-	Config    *config.Config
-	DB        *gorm.DB
-	OAuthGit  *oauth2.Config
-	Router    *gin.Engine
-	rateStore *rateLimiter
-	bindState map[string]uint
+	Config      *config.Config
+	DB          *gorm.DB
+	OAuthGit    *oauth2.Config
+	OAuthGoogle *oauth2.Config
+	Router      *gin.Engine
+	rateStore   *rateLimiter
+	bindState   map[string]uint
 }
 
 func New() *App {
@@ -40,10 +41,20 @@ func NewWithConfig(cfg *config.Config) *App {
 		Scopes:       []string{"read:user", "user:email"},
 		RedirectURL:  cfg.GitHubRedirect,
 	}
+	googleCfg := &oauth2.Config{
+		ClientID:     cfg.GoogleClientID,
+		ClientSecret: cfg.GoogleSecret,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL: "https://oauth2.googleapis.com/token",
+		},
+		Scopes:      []string{"openid", "profile", "email"},
+		RedirectURL: cfg.GoogleRedirect,
+	}
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
-	a := &App{Config: cfg, DB: db, OAuthGit: oauthCfg, Router: r, rateStore: newRateLimiter(), bindState: make(map[string]uint)}
+	a := &App{Config: cfg, DB: db, OAuthGit: oauthCfg, OAuthGoogle: googleCfg, Router: r, rateStore: newRateLimiter(), bindState: make(map[string]uint)}
 	a.registerRoutes()
 	return a
 }
