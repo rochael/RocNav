@@ -75,6 +75,10 @@ function getErrorMessage(error: unknown, fallback: string) {
         return '请输入昵称'
       case 'email already exists':
         return '该邮箱已被注册'
+      case 'google oauth not configured':
+        return 'Google 登录暂未配置，请联系管理员'
+      case 'github oauth not configured':
+        return 'GitHub 登录暂未配置，请联系管理员'
       case 'user disabled':
         return '该账号已被停用'
       case 'cannot disable yourself':
@@ -1172,6 +1176,11 @@ function Header({ user, onLogout }: { user: User | null; onLogout: () => void })
 function App() {
   const data = useAppData()
 
+  const showMessage = useCallback((msg: string) => {
+    data.setMessage(msg)
+    setTimeout(() => data.setMessage(null), 3000)
+  }, [data])
+
   const handleLinkClick = async (link: LinkItem) => {
     try {
       await api(`/api/links/${link.id}/click`, { method: 'POST' })
@@ -1190,7 +1199,7 @@ function App() {
       const res = await api<{ url: string }>('/api/auth/github/start?bind=1')
       window.location.href = res.url
     } catch (error) {
-      console.error(error)
+      showMessage(getErrorMessage(error, 'GitHub 绑定失败'))
     }
   }
 
@@ -1199,7 +1208,7 @@ function App() {
       const res = await api<{ url: string }>('/api/auth/google/start?bind=1')
       window.location.href = res.url
     } catch (error) {
-      console.error(error)
+      showMessage(getErrorMessage(error, 'Google 绑定失败'))
     }
   }
 
