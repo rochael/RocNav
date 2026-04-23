@@ -12,19 +12,19 @@ import (
 )
 
 type AuthService struct {
-	userRepo      *repository.UserRepository
-	shortcutRepo  *repository.ShortcutRepository
-	linkRepo      *repository.LinkRepository
-	jwtSecret     []byte
-	jwtIssuer     string
-	jwtTTL        int64
+	userRepo     *repository.UserRepository
+	shortcutRepo *repository.ShortcutRepository
+	linkRepo     *repository.LinkRepository
+	jwtSecret    []byte
+	jwtIssuer    string
+	jwtTTL       int64
 }
 
 func NewAuthService(userRepo *repository.UserRepository, shortcutRepo *repository.ShortcutRepository, linkRepo *repository.LinkRepository, jwtSecret []byte, jwtIssuer string, jwtTTL int64) *AuthService {
 	return &AuthService{
 		userRepo:     userRepo,
 		shortcutRepo: shortcutRepo,
-		linkRepo:    linkRepo,
+		linkRepo:     linkRepo,
 		jwtSecret:    jwtSecret,
 		jwtIssuer:    jwtIssuer,
 		jwtTTL:       jwtTTL,
@@ -38,8 +38,8 @@ type RegisterRequest struct {
 }
 
 type AuthResult struct {
-	User      *models.User
-	Token     string
+	User       *models.User
+	Token      string
 	TOTPSecret string
 	TOTPURL    string
 }
@@ -64,11 +64,11 @@ func (s *AuthService) Register(req *RegisterRequest) (*AuthResult, error) {
 	}
 
 	user := &models.User{
-		Email:       email,
+		Email:        email,
 		PasswordHash: hash,
-		Nickname:    req.Nickname,
+		Nickname:     req.Nickname,
 		TOTPSecret:   secret,
-		Enabled:     true,
+		Enabled:      true,
 	}
 
 	if err := s.userRepo.Create(user); err != nil {
@@ -87,10 +87,10 @@ func (s *AuthService) Register(req *RegisterRequest) (*AuthResult, error) {
 	token, _ := auth.GenerateJWT(s.jwtSecret, s.jwtIssuer, time.Duration(s.jwtTTL)*time.Second, user.ID, user.Email)
 
 	return &AuthResult{
-		User:      user,
-		Token:     token,
+		User:       user,
+		Token:      token,
 		TOTPSecret: secret,
-		TOTPURL:   urlStr,
+		TOTPURL:    urlStr,
 	}, nil
 }
 
@@ -145,13 +145,10 @@ func (s *AuthService) ChangePassword(userID uint, oldPwd, newPwd string) error {
 }
 
 func (s *AuthService) GetTOTPInfo(user *models.User) (string, string, error) {
-	secret, urlStr, err := auth.GenerateTOTPSecret(user.Email, s.jwtIssuer)
-	if err != nil {
-		return "", "", err
+	if user.TOTPSecret == "" {
+		return "", "", nil
 	}
-	user.TOTPSecret = secret
-	s.userRepo.Update(user)
-	return secret, urlStr, nil
+	return user.TOTPSecret, auth.URL(user.TOTPSecret, user.Email, s.jwtIssuer), nil
 }
 
 func (s *AuthService) FindUserByEmail(email string) (*models.User, error) {

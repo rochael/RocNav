@@ -17,14 +17,21 @@ func NewLinkService(repo *repository.LinkRepository, clickRepo *repository.Click
 }
 
 func (s *LinkService) List(user *models.User, q, categoryID, visibility string) ([]models.Link, error) {
-	// For simplicity, return by owner. The original had complex visibility logic
 	if user == nil {
 		return s.repo.ListForAnonymous()
 	}
 	if user.IsAdmin {
 		return s.repo.ListByOwner(user.ID)
 	}
-	return s.repo.ListByOwner(user.ID)
+	// Logged-in user: show public links + own links
+	switch visibility {
+	case "private":
+		return s.repo.ListByOwner(user.ID)
+	case "all":
+		return s.repo.ListByOwner(user.ID)
+	default:
+		return s.repo.ListPublicAndOwn(user.ID)
+	}
 }
 
 func (s *LinkService) ListByOwner(ownerID uint) ([]models.Link, error) {

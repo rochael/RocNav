@@ -36,10 +36,17 @@ func (r *LinkRepository) ListDefaults() ([]models.Link, error) {
 	return links, err
 }
 
-// ListForAnonymous returns links visible to anonymous users
+// ListForAnonymous returns public default links visible to anonymous users
 func (r *LinkRepository) ListForAnonymous() ([]models.Link, error) {
 	var links []models.Link
-	err := r.db.Where("is_public = 1 AND owner_id != ?", zeroOwnerID).Order("sort_order asc, id asc").Find(&links).Error
+	err := r.db.Where("is_public = 1 AND owner_id = ?", zeroOwnerID).Order("sort_order asc, id asc").Find(&links).Error
+	return links, err
+}
+
+// ListPublicAndOwn returns public links and links owned by the user
+func (r *LinkRepository) ListPublicAndOwn(userID uint) ([]models.Link, error) {
+	var links []models.Link
+	err := r.db.Where("is_public = 1 OR owner_id = ?", userID).Order("sort_order asc, id asc").Find(&links).Error
 	return links, err
 }
 

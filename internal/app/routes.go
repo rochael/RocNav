@@ -56,13 +56,13 @@ func (a *App) registerRoutes() {
 	a.Router.DELETE("/api/admin/default-links/:id", a.adminRequired(), a.linkHandler.DeleteDefault)
 	a.Router.PUT("/api/admin/default-links/reorder", a.adminRequired(), a.linkHandler.ReorderDefaults)
 
-	a.Router.GET("/api/categories", a.categoryHandler.List)
+	a.Router.GET("/api/categories", a.optionalAuth(), a.categoryHandler.List)
 	a.Router.POST("/api/categories", a.authRequired(), a.categoryHandler.Create)
 	a.Router.PUT("/api/categories/:id", a.authRequired(), a.categoryHandler.Update)
 	a.Router.DELETE("/api/categories/:id", a.authRequired(), a.categoryHandler.Delete)
 	a.Router.PUT("/api/categories/reorder", a.authRequired(), a.categoryHandler.Reorder)
 
-	a.Router.GET("/api/links", a.linkHandler.List)
+	a.Router.GET("/api/links", a.optionalAuth(), a.linkHandler.List)
 	a.Router.POST("/api/links", a.authRequired(), a.linkHandler.Create)
 	a.Router.PUT("/api/links/:id", a.authRequired(), a.linkHandler.Update)
 	a.Router.DELETE("/api/links/:id", a.authRequired(), a.linkHandler.Delete)
@@ -99,6 +99,19 @@ func (a *App) registerRoutes() {
 			c.Data(http.StatusOK, "text/html; charset=utf-8", indexBytes)
 		}
 	})
+}
+
+func (a *App) optionalAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, err := a.currentUser(c)
+		if err == nil {
+			c.Set("user", user)
+		}
+		if err != nil && err.Error() != "no token" {
+			a.clearToken(c)
+		}
+		c.Next()
+	}
 }
 
 func (a *App) authRequired() gin.HandlerFunc {

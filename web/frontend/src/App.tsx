@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BrowserRouter, Link, Route, Routes, useLocation } from 'react-router-dom'
+import { BrowserRouter, Link, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd'
 import './App.css'
 
@@ -250,7 +250,11 @@ function AdminPage({
   setMessage: (v: string | null) => void
   loadAll: () => Promise<void>
 }) {
-  const [tab, setTab] = useState<'categories' | 'links' | 'users' | 'profile' | 'default-categories' | 'default-links'>('categories')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [tab, setTab] = useState<'categories' | 'links' | 'users' | 'profile' | 'default-categories' | 'default-links'>(() => {
+    const initialTab = searchParams.get('tab')
+    return initialTab === 'profile' ? 'profile' : 'categories'
+  })
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [systemConfigOpen, setSystemConfigOpen] = useState(false)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
@@ -278,6 +282,13 @@ function AdminPage({
     setMessage(msg)
     setTimeout(() => setMessage(null), 3000)
   }, [setMessage])
+
+  useEffect(() => {
+    if (searchParams.get('tab') === 'profile') {
+      setTab('profile')
+      setSearchParams({}, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
 
   const handleEditCategory = (cat: Category) => {
     setEditingCategory(cat)
@@ -1525,7 +1536,7 @@ function Header({ user, onLogout }: { user: User | null; onLogout: () => void })
             </button>
             {isMenuOpen && (
               <div className="absolute right-0 z-50 mt-2 w-32 rounded-lg bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 animate-in fade-in zoom-in duration-200">
-                <Link to="/admin#admin-account" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => setIsMenuOpen(false)}>个人信息</Link>
+                <Link to="/admin?tab=profile" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => setIsMenuOpen(false)}>个人信息</Link>
                 <Link to="/admin" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" onClick={() => setIsMenuOpen(false)}>设置</Link>
                 <button onClick={() => { setIsMenuOpen(false); onLogout() }} className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50">退出</button>
               </div>

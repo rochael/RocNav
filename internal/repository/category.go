@@ -8,7 +8,7 @@ import (
 var zeroOwnerID uint = 0
 
 type SortItem struct {
-	ID       uint `json:"id"`
+	ID        uint `json:"id"`
 	SortOrder int  `json:"sort_order"`
 }
 
@@ -34,10 +34,10 @@ func (r *CategoryRepository) ListDefaults() ([]models.Category, error) {
 	return cats, err
 }
 
-// ListForAnonymous returns categories visible to anonymous users (owner_id IS NULL)
+// ListForAnonymous returns system default categories visible to anonymous users
 func (r *CategoryRepository) ListForAnonymous() ([]models.Category, error) {
 	var cats []models.Category
-	err := r.db.Where("owner_id IS NULL").Order("sort_order asc, id asc").Find(&cats).Error
+	err := r.db.Where("owner_id = ?", zeroOwnerID).Order("sort_order asc, id asc").Find(&cats).Error
 	return cats, err
 }
 
