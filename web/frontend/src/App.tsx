@@ -250,7 +250,7 @@ function AdminPage({
   setMessage: (v: string | null) => void
   loadAll: () => Promise<void>
 }) {
-  const [tab, setTab] = useState<'categories' | 'links' | 'users' | 'profile'>(user?.is_admin ? 'categories' : 'profile')
+  const [tab, setTab] = useState<'categories' | 'links' | 'users' | 'profile'>('categories')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [authForm, setAuthForm] = useState({ email: '', password: '', nickname: '', otp: '' })
@@ -430,10 +430,6 @@ function AdminPage({
 
   useEffect(() => {
     if (!user) return
-    if (!user.is_admin && tab !== 'profile') {
-      setTab('profile')
-      return
-    }
     if (user.is_admin && tab === 'users') {
       void reloadUsers()
     }
@@ -560,18 +556,16 @@ function AdminPage({
           <aside className="hidden h-fit w-[240px] rounded-2xl bg-white p-5 shadow-lg lg:block sticky top-8">
             <nav className="flex flex-col gap-2 text-sm font-medium text-gray-600">
               {user.is_admin && (
-                <>
-                  <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('categories')}>
-                    <span>📁</span> 分类管理
-                  </button>
-                  <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('links')}>
-                    <span>🔗</span> 链接管理
-                  </button>
-                  <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('users')}>
-                    <span>🧑‍💼</span> 用户管理
-                  </button>
-                </>
+                <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('users')}>
+                  <span>🧑‍💼</span> 用户管理
+                </button>
               )}
+              <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('categories')}>
+                <span>📁</span> 分类管理
+              </button>
+              <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('links')}>
+                <span>🔗</span> 链接管理
+              </button>
               <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('profile')}>
                 <span>👤</span> 个人信息
               </button>
@@ -586,18 +580,16 @@ function AdminPage({
                   <button onClick={() => setMobileNavOpen(false)} className="text-gray-500 hover:text-gray-800">✕</button>
                 </div>
                 {user.is_admin && (
-                  <>
-                    <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('categories'); setMobileNavOpen(false) }}>
-                      <span>📁</span> 分类管理
-                    </button>
-                    <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('links'); setMobileNavOpen(false) }}>
-                      <span>🔗</span> 链接管理
-                    </button>
-                    <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('users'); setMobileNavOpen(false) }}>
-                      <span>🧑‍💼</span> 用户管理
-                    </button>
-                  </>
+                  <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('users'); setMobileNavOpen(false) }}>
+                    <span>🧑‍💼</span> 用户管理
+                  </button>
                 )}
+                <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('categories'); setMobileNavOpen(false) }}>
+                  <span>📁</span> 分类管理
+                </button>
+                <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('links'); setMobileNavOpen(false) }}>
+                  <span>🔗</span> 链接管理
+                </button>
                 <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('profile'); setMobileNavOpen(false) }}>
                   <span>👤</span> 个人信息
                 </button>
