@@ -3,12 +3,16 @@ package app
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rochael/RocNav/internal/auth"
 	"github.com/rochael/RocNav/internal/config"
 	"github.com/rochael/RocNav/internal/database"
+	"github.com/rochael/RocNav/internal/handler"
 	"github.com/rochael/RocNav/internal/models"
+	"github.com/rochael/RocNav/internal/repository"
+	"github.com/rochael/RocNav/internal/service"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
 	"gorm.io/gorm"
@@ -22,6 +26,26 @@ type App struct {
 	Router      *gin.Engine
 	rateStore   *rateLimiter
 	oauthState  map[string]oauthFlowState
+
+	// 依赖注入
+	userRepo       *repository.UserRepository
+	categoryRepo   *repository.CategoryRepository
+	linkRepo       *repository.LinkRepository
+	shortcutRepo   *repository.ShortcutRepository
+	clickRepo      *repository.ClickRepository
+	bookmarkRepo   *repository.BookmarkRepository
+
+	authSvc        *service.AuthService
+	categorySvc    *service.CategoryService
+	linkSvc        *service.LinkService
+	adminSvc       *service.AdminService
+	bookmarkSvc    *service.BookmarkService
+
+	authHandler    *handler.AuthHandler
+	categoryHandler *handler.CategoryHandler
+	linkHandler    *handler.LinkHandler
+	adminHandler   *handler.AdminHandler
+	bookmarkHandler *handler.BookmarkHandler
 }
 
 type oauthFlowState struct {
@@ -58,6 +82,28 @@ func NewWithConfig(cfg *config.Config) *App {
 		RedirectURL: cfg.GoogleRedirect,
 	}
 
+	// 初始化 Repository 层
+	userRepo := repository.NewUserRepository(db)
+	categoryRepo := repository.NewCategoryRepository(db)
+	linkRepo := repository.NewLinkRepository(db)
+	shortcutRepo := repository.NewShortcutRepository(db)
+	clickRepo := repository.NewClickRepository(db)
+	bookmarkRepo := repository.NewBookmarkRepository(db)
+
+	// 初始化 Service 层
+	authSvc := service.NewAuthService(userRepo, shortcutRepo, linkRepo, cfg.JWTSecret, cfg.JWTIssuer, int64(cfg.JWTTTL/time.Second))
+	categorySvc := service.NewCategoryService(categoryRepo)
+	linkSvc := service.NewLinkService(linkRepo, clickRepo)
+	adminSvc := service.NewAdminService(userRepo, categoryRepo, linkRepo)
+	bookmarkSvc := service.NewBookmarkService(bookmarkRepo)
+
+	// 初始化 Handler 层
+	authHandler := handler.NewAuthHandler(authSvc, cfg.AllowRegister)
+	categoryHandler := handler.NewCategoryHandler(categorySvc)
+	linkHandler := handler.NewLinkHandler(linkSvc)
+	adminHandler := handler.NewAdminHandler(adminSvc)
+	bookmarkHandler := handler.NewBookmarkHandler(bookmarkSvc)
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 	a := &App{
@@ -68,6 +114,25 @@ func NewWithConfig(cfg *config.Config) *App {
 		Router:      r,
 		rateStore:   newRateLimiter(),
 		oauthState:  make(map[string]oauthFlowState),
+
+		userRepo:       userRepo,
+		categoryRepo:   categoryRepo,
+		linkRepo:       linkRepo,
+		shortcutRepo:   shortcutRepo,
+		clickRepo:      clickRepo,
+		bookmarkRepo:   bookmarkRepo,
+
+		authSvc:        authSvc,
+		categorySvc:    categorySvc,
+		linkSvc:        linkSvc,
+		adminSvc:       adminSvc,
+		bookmarkSvc:    bookmarkSvc,
+
+		authHandler:    authHandler,
+		categoryHandler: categoryHandler,
+		linkHandler:    linkHandler,
+		adminHandler:   adminHandler,
+		bookmarkHandler: bookmarkHandler,
 	}
 	a.registerRoutes()
 	return a
