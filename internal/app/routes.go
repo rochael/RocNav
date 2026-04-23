@@ -1225,5 +1225,5 @@ func guessIcon(link string) string {
 	if err != nil || u.Host == "" {
 		return ""
 	}
-	return fmt.Sprintf("https://www.google.com/s2/favicons?domain=%s", u.Host)
+	return fmt.Sprintf("https://www.google.com/s2/favicons?domain=%s&sz=64", u.Host)
 }

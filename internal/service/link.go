@@ -36,7 +36,7 @@ func (s *LinkService) guessIcon(linkURL string) string {
 	if err != nil {
 		return ""
 	}
-	return "https://www.google.com/s2/favicons?domain=" + u.Host
+	return "https://www.google.com/s2/favicons?domain=" + u.Host + "&sz=64"
 }
 
 func (s *LinkService) Create(ownerID uint, categoryID uint, title, linkURL string, isPublic bool, sortOrder int, iconURL, remark string) (*models.Link, error) {
