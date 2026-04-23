@@ -5,8 +5,8 @@ import './App.css'
 
 type User = { id: number; email: string; nickname?: string; enabled?: boolean; is_admin: boolean; github_id?: string; google_id?: string }
 type AdminUser = User & { created_at: string; updated_at: string }
-type Category = { id: number; name: string; description?: string; sort_order: number }
-type LinkItem = { id: number; category_id: number; title: string; url: string; is_public: boolean; sort_order: number; icon_url?: string; click_count?: number; remark?: string }
+type Category = { id: number; name: string; description?: string; sort_order: number; owner_id?: number }
+type LinkItem = { id: number; category_id: number; title: string; url: string; is_public: boolean; sort_order: number; icon_url?: string; click_count?: number; remark?: string; owner_id?: number }
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
@@ -250,8 +250,9 @@ function AdminPage({
   setMessage: (v: string | null) => void
   loadAll: () => Promise<void>
 }) {
-  const [tab, setTab] = useState<'categories' | 'links' | 'users' | 'profile'>('categories')
+  const [tab, setTab] = useState<'categories' | 'links' | 'users' | 'profile' | 'default-categories' | 'default-links'>('categories')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [systemConfigOpen, setSystemConfigOpen] = useState(false)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [authForm, setAuthForm] = useState({ email: '', password: '', nickname: '', otp: '' })
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
@@ -266,6 +267,12 @@ function AdminPage({
   const [linkForm, setLinkForm] = useState({ category_id: '', title: '', url: '', is_public: true, sort_order: 0, icon_url: '', remark: '' })
   const [pwdForm, setPwdForm] = useState({ old_password: '', new_password: '', confirm: '' })
   const [profileLoading, setProfileLoading] = useState(false)
+  const [defaultCategories, setDefaultCategories] = useState<Category[]>([])
+  const [defaultLinks, setDefaultLinks] = useState<LinkItem[]>([])
+  const [editingDefaultCategory, setEditingDefaultCategory] = useState<Category | null>(null)
+  const [editingDefaultLink, setEditingDefaultLink] = useState<LinkItem | null>(null)
+  const [defaultCategoryForm, setDefaultCategoryForm] = useState({ name: '', description: '', sort_order: 0 })
+  const [defaultLinkForm, setDefaultLinkForm] = useState({ category_id: '', title: '', url: '', is_public: true, sort_order: 0, icon_url: '', remark: '' })
 
   const showMessage = useCallback((msg: string) => {
     setMessage(msg)
@@ -433,7 +440,31 @@ function AdminPage({
     if (user.is_admin && tab === 'users') {
       void reloadUsers()
     }
+    if (user.is_admin && (tab === 'default-categories' || tab === 'default-links')) {
+      void loadDefaultCategories()
+      if (tab === 'default-links') {
+        void loadDefaultLinks()
+      }
+    }
   }, [reloadUsers, tab, user])
+
+  const loadDefaultCategories = useCallback(async () => {
+    try {
+      const res = await api<{ categories: Category[] }>('/api/admin/default-categories')
+      setDefaultCategories(res.categories || [])
+    } catch (error) {
+      console.error(error)
+    }
+  }, [])
+
+  const loadDefaultLinks = useCallback(async () => {
+    try {
+      const res = await api<{ links: LinkItem[] }>('/api/admin/default-links')
+      setDefaultLinks(res.links || [])
+    } catch (error) {
+      console.error(error)
+    }
+  }, [])
 
   useEffect(() => {
     if (tab === 'profile' && user) {
@@ -555,11 +586,6 @@ function AdminPage({
           </button>
           <aside className="hidden h-fit w-[240px] rounded-2xl bg-white p-5 shadow-lg lg:block sticky top-8">
             <nav className="flex flex-col gap-2 text-sm font-medium text-gray-600">
-              {user.is_admin && (
-                <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('users')}>
-                  <span>🧑‍💼</span> 用户管理
-                </button>
-              )}
               <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('categories')}>
                 <span>📁</span> 分类管理
               </button>
@@ -569,6 +595,29 @@ function AdminPage({
               <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('profile')}>
                 <span>👤</span> 个人信息
               </button>
+              {user.is_admin && (
+                <>
+                  <div className="my-1 border-t border-gray-100" />
+                  <button className="flex items-center gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-accent/10 hover:text-accent" onClick={() => setSystemConfigOpen(o => !o)}>
+                    <span>⚙️</span>
+                    <span className="flex-1 text-left">系统配置</span>
+                    <span className={`text-xs transition-transform ${systemConfigOpen ? 'rotate-90' : ''}`}>▶</span>
+                  </button>
+                  {systemConfigOpen && (
+                    <div className="ml-4 flex flex-col gap-1">
+                      <button className={`flex items-center gap-3 rounded-xl px-4 py-2 transition-colors text-xs ${tab === 'default-categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('default-categories')}>
+                        <span>📁</span> 默认分类
+                      </button>
+                      <button className={`flex items-center gap-3 rounded-xl px-4 py-2 transition-colors text-xs ${tab === 'default-links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('default-links')}>
+                        <span>🔗</span> 默认链接
+                      </button>
+                    </div>
+                  )}
+                  <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('users')}>
+                    <span>🧑‍💼</span> 用户管理
+                  </button>
+                </>
+              )}
             </nav>
           </aside>
 
@@ -579,11 +628,6 @@ function AdminPage({
                   <div className="text-sm font-semibold text-gray-700">菜单</div>
                   <button onClick={() => setMobileNavOpen(false)} className="text-gray-500 hover:text-gray-800">✕</button>
                 </div>
-                {user.is_admin && (
-                  <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('users'); setMobileNavOpen(false) }}>
-                    <span>🧑‍💼</span> 用户管理
-                  </button>
-                )}
                 <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('categories'); setMobileNavOpen(false) }}>
                   <span>📁</span> 分类管理
                 </button>
@@ -593,6 +637,29 @@ function AdminPage({
                 <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('profile'); setMobileNavOpen(false) }}>
                   <span>👤</span> 个人信息
                 </button>
+                {user.is_admin && (
+                  <>
+                    <div className="my-1 border-t border-gray-100" />
+                    <button className="flex items-center gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-accent/10 hover:text-accent" onClick={() => setSystemConfigOpen(o => !o)}>
+                      <span>⚙️</span>
+                      <span className="flex-1 text-left">系统配置</span>
+                      <span className={`text-xs transition-transform ${systemConfigOpen ? 'rotate-90' : ''}`}>▶</span>
+                    </button>
+                    {systemConfigOpen && (
+                      <div className="ml-4 flex flex-col gap-1">
+                        <button className={`flex items-center gap-3 rounded-xl px-4 py-2 transition-colors text-xs ${tab === 'default-categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('default-categories'); setMobileNavOpen(false) }}>
+                          <span>📁</span> 默认分类
+                        </button>
+                        <button className={`flex items-center gap-3 rounded-xl px-4 py-2 transition-colors text-xs ${tab === 'default-links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('default-links'); setMobileNavOpen(false) }}>
+                          <span>🔗</span> 默认链接
+                        </button>
+                      </div>
+                    )}
+                    <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'users' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('users'); setMobileNavOpen(false) }}>
+                      <span>🧑‍💼</span> 用户管理
+                    </button>
+                  </>
+                )}
               </div>
               <div className="flex-1" onClick={() => setMobileNavOpen(false)}></div>
             </div>
@@ -889,6 +956,225 @@ function AdminPage({
         </div>
       )}
 
+      {user && user.is_admin && tab === 'default-categories' && (
+        <div className="space-y-6">
+          <div className="rounded-2xl bg-white p-6 shadow-lg">
+            <h3 className="mb-4 text-xl font-bold text-gray-800">默认分类</h3>
+            <div className="grid gap-4 md:grid-cols-2">
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="分类名" value={defaultCategoryForm.name} onChange={(e) => setDefaultCategoryForm({ ...defaultCategoryForm, name: e.target.value })} />
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="分类描述" value={defaultCategoryForm.description} onChange={(e) => setDefaultCategoryForm({ ...defaultCategoryForm, description: e.target.value })} />
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="排序(数字)" type="number" value={defaultCategoryForm.sort_order} onChange={(e) => setDefaultCategoryForm({ ...defaultCategoryForm, sort_order: Number(e.target.value) })} />
+              <button onClick={async () => {
+                try {
+                  await api('/api/admin/default-categories', { method: 'POST', body: JSON.stringify(defaultCategoryForm) })
+                  setDefaultCategoryForm({ name: '', description: '', sort_order: 0 })
+                  showMessage('默认分类已创建')
+                  await loadDefaultCategories()
+                } catch (error) {
+                  showMessage(getErrorMessage(error, '创建默认分类失败'))
+                }
+              }} className="rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-md hover:bg-opacity-90 transition-all active:scale-95">新建默认分类</button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white p-6 shadow-lg space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-bold text-gray-800">默认分类列表</h3>
+              <span className="text-xs text-gray-400">拖拽排序</span>
+            </div>
+            <DragDropContext onDragEnd={async (result: DropResult) => {
+              if (!result.destination) return
+              if (result.type === 'default-category') {
+                const updated = Array.from(defaultCategories)
+                const [removed] = updated.splice(result.source.index, 1)
+                updated.splice(result.destination.index, 0, removed)
+                const reordered = updated.map((c, idx) => ({ ...c, sort_order: idx }))
+                setDefaultCategories(reordered)
+                try {
+                  await api('/api/admin/default-categories/reorder', { method: 'PUT', body: JSON.stringify(reordered.map((c) => ({ id: c.id, sort_order: c.sort_order }))) })
+                } catch (error) {
+                  showMessage(getErrorMessage(error, '排序失败'))
+                }
+              }
+            }}>
+              <Droppable droppableId="default-categories" type="default-category">
+                {(provided) => (
+                  <div ref={provided.innerRef} {...provided.droppableProps} className="flex flex-col gap-4">
+                    {defaultCategories.sort((a, b) => a.sort_order - b.sort_order).map((cat, idx) => (
+                      <Draggable draggableId={`dcat-${cat.id}`} index={idx} key={cat.id}>
+                        {(providedCat) => (
+                          <div ref={providedCat.innerRef} {...providedCat.draggableProps} className="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 shadow-sm">
+                            <span {...providedCat.dragHandleProps} className="inline-flex h-8 w-8 cursor-grab items-center justify-center rounded-lg bg-white text-gray-400 shadow-sm hover:text-accent">☰</span>
+                            <div className="min-w-0">
+                              <div className="font-semibold text-gray-800">{cat.name}</div>
+                              {cat.description && <div className="text-sm text-gray-500 truncate">{cat.description}</div>}
+                            </div>
+                            <div className="ml-auto flex gap-2">
+                              <button onClick={() => setEditingDefaultCategory(cat)} className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm hover:bg-gray-50">编辑</button>
+                              <button onClick={async () => {
+                                if (!window.confirm(`确认删除默认分类「${cat.name}」？`)) return
+                                try {
+                                  await api(`/api/admin/default-categories/${cat.id}`, { method: 'DELETE' })
+                                  showMessage('默认分类已删除')
+                                  await loadDefaultCategories()
+                                } catch (error) {
+                                  showMessage(getErrorMessage(error, '删除失败'))
+                                }
+                              }} className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-red-500 shadow-sm hover:bg-red-50">删除</button>
+                            </div>
+                          </div>
+                        )}
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
+                  </div>
+                )}
+              </Droppable>
+            </DragDropContext>
+          </div>
+        </div>
+      )}
+
+      {user && user.is_admin && tab === 'default-links' && (
+        <div className="space-y-6">
+          <div className="rounded-2xl bg-white p-6 shadow-lg">
+            <h3 className="mb-4 text-xl font-bold text-gray-800">默认链接</h3>
+            <div className="grid gap-4 md:grid-cols-2">
+              <select className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" value={defaultLinkForm.category_id} onChange={(e) => setDefaultLinkForm({ ...defaultLinkForm, category_id: e.target.value })}>
+                <option value="">选择默认分类</option>
+                {defaultCategories.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="标题" value={defaultLinkForm.title} onChange={(e) => setDefaultLinkForm({ ...defaultLinkForm, title: e.target.value })} />
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="URL" value={defaultLinkForm.url} onChange={(e) => setDefaultLinkForm({ ...defaultLinkForm, url: e.target.value })} />
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="图标 URL (可选)" value={defaultLinkForm.icon_url} onChange={(e) => setDefaultLinkForm({ ...defaultLinkForm, icon_url: e.target.value })} />
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="备注 (可选)" value={defaultLinkForm.remark} onChange={(e) => setDefaultLinkForm({ ...defaultLinkForm, remark: e.target.value })} />
+              <div className="flex items-center gap-2 px-1">
+                <input id="defaultLinkPublic" type="checkbox" checked={defaultLinkForm.is_public} onChange={(e) => setDefaultLinkForm({ ...defaultLinkForm, is_public: e.target.checked })} className="h-5 w-5 rounded border-gray-300 text-accent focus:ring-accent" />
+                <label htmlFor="defaultLinkPublic" className="text-sm font-medium text-gray-700">公开</label>
+              </div>
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="排序(数字)" type="number" value={defaultLinkForm.sort_order} onChange={(e) => setDefaultLinkForm({ ...defaultLinkForm, sort_order: Number(e.target.value) })} />
+              <button onClick={async () => {
+                try {
+                  await api('/api/admin/default-links', { method: 'POST', body: JSON.stringify({ ...defaultLinkForm, category_id: Number(defaultLinkForm.category_id) }) })
+                  setDefaultLinkForm({ category_id: '', title: '', url: '', is_public: true, sort_order: 0, icon_url: '', remark: '' })
+                  showMessage('默认链接已创建')
+                  await loadDefaultLinks()
+                } catch (error) {
+                  showMessage(getErrorMessage(error, '创建默认链接失败'))
+                }
+              }} className="rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-md hover:bg-opacity-90 transition-all active:scale-95">新增默认链接</button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white p-6 shadow-lg space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-bold text-gray-800">默认链接拖拽排序</h3>
+              <span className="text-xs text-gray-400">拖拽即可自动保存</span>
+            </div>
+            <DragDropContext onDragEnd={async (result: DropResult) => {
+              if (!result.destination) return
+              if (result.type === 'default-link') {
+                const updated = Array.from(defaultLinks)
+                const [removed] = updated.splice(result.source.index, 1)
+                updated.splice(result.destination.index, 0, removed)
+                const reordered = updated.map((l, idx) => ({ ...l, sort_order: idx }))
+                setDefaultLinks(reordered)
+                try {
+                  await api('/api/admin/default-links/reorder', { method: 'PUT', body: JSON.stringify(reordered.map((l) => ({ id: l.id, sort_order: l.sort_order }))) })
+                } catch (error) {
+                  showMessage(getErrorMessage(error, '排序失败'))
+                }
+              }
+            }}>
+              <Droppable droppableId="default-categories" type="default-category">
+                {(provided) => (
+                  <div ref={provided.innerRef} {...provided.droppableProps} className="flex flex-col gap-8">
+                    {defaultCategories.sort((a, b) => a.sort_order - b.sort_order).map((cat, idx) => {
+                      const catLinks = defaultLinks.filter((l) => l.category_id === cat.id).sort((a, b) => a.sort_order - b.sort_order)
+                      return (
+                        <Draggable draggableId={`dcat-${cat.id}`} index={idx} key={cat.id}>
+                          {(providedCat) => (
+                            <div ref={providedCat.innerRef} {...providedCat.draggableProps} className="space-y-4 rounded-xl border border-gray-100 bg-gray-50 p-4 transition-shadow hover:shadow-md">
+                              <div {...providedCat.dragHandleProps} className="flex items-center gap-3 text-lg font-semibold text-gray-700">
+                                <span className="inline-flex h-8 w-8 cursor-grab items-center justify-center rounded-lg bg-white text-gray-400 shadow-sm hover:text-accent">☰</span>
+                                <div>
+                                  <div className="font-bold">{cat.name}</div>
+                                  {cat.description && <div className="text-sm font-normal text-gray-500">{cat.description}</div>}
+                                </div>
+                                <div className="ml-auto flex gap-2">
+                                  <button onClick={() => setEditingDefaultCategory(cat)} className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm hover:bg-gray-50">编辑</button>
+                                  <button onClick={async () => {
+                                    if (!window.confirm(`确认删除默认分类「${cat.name}」及其下链接？`)) return
+                                    try {
+                                      await api(`/api/admin/default-categories/${cat.id}`, { method: 'DELETE' })
+                                      showMessage('默认分类已删除')
+                                      await loadDefaultCategories()
+                                      await loadDefaultLinks()
+                                    } catch (error) {
+                                      showMessage(getErrorMessage(error, '删除失败'))
+                                    }
+                                  }} className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-red-500 shadow-sm hover:bg-red-50">删除</button>
+                                </div>
+                              </div>
+                              <Droppable droppableId={`dlinks-${cat.id}`} type="default-link">
+                                {(dropProvided) => (
+                                  <div ref={dropProvided.innerRef} {...dropProvided.droppableProps} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                                    {catLinks.map((link, idx2) => (
+                                      <Draggable draggableId={`dlink-${link.id}`} index={idx2} key={link.id}>
+                                        {(dragProvided) => (
+                                          <div
+                                            ref={dragProvided.innerRef}
+                                            {...dragProvided.draggableProps}
+                                            {...dragProvided.dragHandleProps}
+                                            className="flex items-center gap-3 rounded-lg bg-white p-3 shadow-sm border border-gray-100 hover:shadow-md transition-shadow cursor-grab"
+                                          >
+                                            {link.icon_url ? <img src={link.icon_url} alt="" className="h-6 w-6 rounded" /> : <div className="h-6 w-6 flex items-center justify-center rounded bg-accent/10 text-xs text-accent font-bold">{link.title[0]}</div>}
+                                            <div className="flex flex-col min-w-0">
+                                              <span className="truncate text-sm font-medium text-gray-700">{link.title}</span>
+                                              <span className="truncate text-xs text-gray-400">{link.url}</span>
+                                              {link.remark && <span className="truncate text-xs text-gray-500">{link.remark}</span>}
+                                            </div>
+                                            <div className="ml-auto flex flex-col items-end gap-1.5">
+                                              {!link.is_public && <span className="rounded-full bg-yellow-50 px-1.5 py-0.5 text-[10px] text-yellow-600 border border-yellow-100">私有</span>}
+                                              <div className="flex gap-1">
+                                                <button onClick={(e) => { e.stopPropagation(); setEditingDefaultLink(link) }} className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700">编辑</button>
+                                                <button onClick={async (e) => {
+                                                  e.stopPropagation()
+                                                  if (!window.confirm(`确认删除链接「${link.title}」？`)) return
+                                                  try {
+                                                    await api(`/api/admin/default-links/${link.id}`, { method: 'DELETE' })
+                                                    showMessage('默认链接已删除')
+                                                    await loadDefaultLinks()
+                                                  } catch (error) {
+                                                    showMessage(getErrorMessage(error, '删除失败'))
+                                                  }
+                                                }} className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-50 hover:text-red-600">删</button>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </Draggable>
+                                    ))}
+                                    {dropProvided.placeholder}
+                                  </div>
+                                )}
+                              </Droppable>
+                            </div>
+                          )}
+                        </Draggable>
+                      )
+                    })}
+                    {provided.placeholder}
+                  </div>
+                )}
+              </Droppable>
+            </DragDropContext>
+          </div>
+        </div>
+      )}
+
       {user && tab === 'profile' && (
         <div className="space-y-6">
           <div className="rounded-2xl bg-white p-6 shadow-lg">
@@ -1119,6 +1405,91 @@ function AdminPage({
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setEditingUser(null)} className="rounded-lg bg-gray-100 px-4 py-2 text-sm text-gray-700 hover:bg-gray-200">取消</button>
+            <button type="submit" className="rounded-lg bg-accent px-4 py-2 text-sm text-white shadow-md hover:bg-opacity-90">保存</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal isOpen={!!editingDefaultCategory} onClose={() => setEditingDefaultCategory(null)} title="编辑默认分类">
+        <form onSubmit={async (e) => {
+          e.preventDefault()
+          if (!editingDefaultCategory) return
+          try {
+            await api(`/api/admin/default-categories/${editingDefaultCategory.id}`, { method: 'PUT', body: JSON.stringify(editingDefaultCategory) })
+            setEditingDefaultCategory(null)
+            showMessage('默认分类已更新')
+            await loadDefaultCategories()
+          } catch (error) {
+            showMessage(getErrorMessage(error, '更新失败'))
+          }
+        }} className="flex flex-col gap-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">名称</label>
+            <input className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent" value={editingDefaultCategory?.name || ''} onChange={(e) => setEditingDefaultCategory(prev => prev ? ({ ...prev, name: e.target.value }) : null)} required />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">描述</label>
+            <input className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent" value={editingDefaultCategory?.description || ''} onChange={(e) => setEditingDefaultCategory(prev => prev ? ({ ...prev, description: e.target.value }) : null)} />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">排序</label>
+            <input type="number" className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent" value={editingDefaultCategory?.sort_order || 0} onChange={(e) => setEditingDefaultCategory(prev => prev ? ({ ...prev, sort_order: Number(e.target.value) }) : null)} />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={() => setEditingDefaultCategory(null)} className="rounded-lg bg-gray-100 px-4 py-2 text-sm text-gray-700 hover:bg-gray-200">取消</button>
+            <button type="submit" className="rounded-lg bg-accent px-4 py-2 text-sm text-white shadow-md hover:bg-opacity-90">保存</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal isOpen={!!editingDefaultLink} onClose={() => setEditingDefaultLink(null)} title="编辑默认链接">
+        <form onSubmit={async (e) => {
+          e.preventDefault()
+          if (!editingDefaultLink) return
+          try {
+            await api(`/api/admin/default-links/${editingDefaultLink.id}`, { method: 'PUT', body: JSON.stringify(editingDefaultLink) })
+            setEditingDefaultLink(null)
+            showMessage('默认链接已更新')
+            await loadDefaultLinks()
+          } catch (error) {
+            showMessage(getErrorMessage(error, '更新失败'))
+          }
+        }} className="flex flex-col gap-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">分类</label>
+            <select className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent" value={editingDefaultLink?.category_id || ''} onChange={(e) => setEditingDefaultLink(prev => prev ? ({ ...prev, category_id: Number(e.target.value) }) : null)}>
+              <option value="">选择分类</option>
+              {defaultCategories.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">标题</label>
+            <input className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent" value={editingDefaultLink?.title || ''} onChange={(e) => setEditingDefaultLink(prev => prev ? ({ ...prev, title: e.target.value }) : null)} required />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">URL</label>
+            <input className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent" value={editingDefaultLink?.url || ''} onChange={(e) => setEditingDefaultLink(prev => prev ? ({ ...prev, url: e.target.value }) : null)} required />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">图标 URL</label>
+            <input className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent" value={editingDefaultLink?.icon_url || ''} onChange={(e) => setEditingDefaultLink(prev => prev ? ({ ...prev, icon_url: e.target.value }) : null)} />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">备注</label>
+            <input className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent" value={editingDefaultLink?.remark || ''} onChange={(e) => setEditingDefaultLink(prev => prev ? ({ ...prev, remark: e.target.value }) : null)} />
+          </div>
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <label className="mb-1 block text-sm font-medium text-gray-700">排序</label>
+              <input type="number" className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent" value={editingDefaultLink?.sort_order || 0} onChange={(e) => setEditingDefaultLink(prev => prev ? ({ ...prev, sort_order: Number(e.target.value) }) : null)} />
+            </div>
+            <div className="flex items-center pt-6">
+              <input id="editDefaultLinkPublic" type="checkbox" checked={editingDefaultLink?.is_public || false} onChange={(e) => setEditingDefaultLink(prev => prev ? ({ ...prev, is_public: e.target.checked }) : null)} className="mr-2 h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent" />
+              <label htmlFor="editDefaultLinkPublic" className="text-sm text-gray-700">公开</label>
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={() => setEditingDefaultLink(null)} className="rounded-lg bg-gray-100 px-4 py-2 text-sm text-gray-700 hover:bg-gray-200">取消</button>
             <button type="submit" className="rounded-lg bg-accent px-4 py-2 text-sm text-white shadow-md hover:bg-opacity-90">保存</button>
           </div>
         </form>

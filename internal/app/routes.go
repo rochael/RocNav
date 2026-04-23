@@ -44,6 +44,18 @@ func (a *App) registerRoutes() {
 	a.Router.GET("/api/admin/users", a.adminRequired(), a.handleListUsers)
 	a.Router.PUT("/api/admin/users/:id", a.adminRequired(), a.handleUpdateUser)
 
+	a.Router.GET("/api/admin/default-categories", a.adminRequired(), a.handleListDefaultCategories)
+	a.Router.POST("/api/admin/default-categories", a.adminRequired(), a.handleCreateDefaultCategory)
+	a.Router.PUT("/api/admin/default-categories/:id", a.adminRequired(), a.handleUpdateDefaultCategory)
+	a.Router.DELETE("/api/admin/default-categories/:id", a.adminRequired(), a.handleDeleteDefaultCategory)
+	a.Router.PUT("/api/admin/default-categories/reorder", a.adminRequired(), a.handleReorderDefaultCategories)
+
+	a.Router.GET("/api/admin/default-links", a.adminRequired(), a.handleListDefaultLinks)
+	a.Router.POST("/api/admin/default-links", a.adminRequired(), a.handleCreateDefaultLink)
+	a.Router.PUT("/api/admin/default-links/:id", a.adminRequired(), a.handleUpdateDefaultLink)
+	a.Router.DELETE("/api/admin/default-links/:id", a.adminRequired(), a.handleDeleteDefaultLink)
+	a.Router.PUT("/api/admin/default-links/reorder", a.adminRequired(), a.handleReorderDefaultLinks)
+
 	a.Router.GET("/api/categories", a.handleListCategories)
 	a.Router.POST("/api/categories", a.authRequired(), a.handleCreateCategory)
 	a.Router.PUT("/api/categories/:id", a.authRequired(), a.handleUpdateCategory)
@@ -215,6 +227,15 @@ func (a *App) handleRegister(c *gin.Context) {
 	if err := a.DB.Create(&u).Error; err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "user exists"})
 		return
+	}
+	var defaultLinkIDs []uint
+	a.DB.Model(&models.Link{}).Where("is_public = 1 AND owner_id = 0").Pluck("id", &defaultLinkIDs)
+	if len(defaultLinkIDs) > 0 {
+		ids := make([]string, len(defaultLinkIDs))
+		for i, id := range defaultLinkIDs {
+			ids[i] = fmt.Sprintf("%d", id)
+		}
+		a.DB.Create(&models.Shortcut{OwnerID: u.ID, Links: strings.Join(ids, ",")})
 	}
 	token, _ := auth.GenerateJWT(a.Config.JWTSecret, a.Config.JWTIssuer, a.Config.JWTTTL, u.ID, u.Email)
 	a.setToken(c, token)
@@ -554,8 +575,10 @@ func (a *App) handleListCategories(c *gin.Context) {
 	dbq := a.DB.Order("sort_order asc, id asc")
 	if user == nil {
 		dbq = dbq.Where("owner_id IS NULL")
-	} else if !user.IsAdmin {
-		dbq = dbq.Where("owner_id = ? OR owner_id IS NULL", user.ID)
+	} else if user.IsAdmin {
+		dbq = dbq.Where("owner_id != 0")
+	} else {
+		dbq = dbq.Where("owner_id = ?", user.ID)
 	}
 	dbq.Find(&categories)
 	c.JSON(http.StatusOK, gin.H{"categories": categories})
@@ -665,17 +688,9 @@ func (a *App) handleListLinks(c *gin.Context) {
 		dbq = dbq.Where("category_id = ?", categoryID)
 	}
 	if user == nil {
-		dbq = dbq.Where("is_public = 1")
+		dbq = dbq.Where("is_public = 1 AND owner_id != 0")
 	} else if user.IsAdmin {
-		// admin sees all, but keep visibility filters if explicitly requested
-		switch visibility {
-		case "private":
-			dbq = dbq.Where("is_public = 0")
-		case "all":
-			// no-op, all records
-		default:
-			dbq = dbq.Where("is_public = 1")
-		}
+		dbq = dbq.Where("owner_id != 0")
 	} else {
 		switch visibility {
 		case "private":
@@ -797,6 +812,230 @@ func (a *App) handleReorderLinks(c *gin.Context) {
 	}
 	for _, item := range items {
 		a.DB.Model(&models.Link{}).Where("id = ? AND (owner_id = ? OR ?)", item.ID, user.ID, user.IsAdmin).Update("sort_order", item.SortOrder)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+var zeroOwnerID uint = 0
+
+func (a *App) handleListDefaultCategories(c *gin.Context) {
+	var categories []models.Category
+	a.DB.Where("owner_id = ?", zeroOwnerID).Order("sort_order asc, id asc").Find(&categories)
+	c.JSON(http.StatusOK, gin.H{"categories": categories})
+}
+
+func (a *App) handleCreateDefaultCategory(c *gin.Context) {
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		SortOrder   int    `json:"sort_order"`
+	}
+	if err := c.BindJSON(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	cat := models.Category{Name: req.Name, Description: req.Description, SortOrder: req.SortOrder, OwnerID: &zeroOwnerID}
+	if err := a.DB.Create(&cat).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"category": cat})
+}
+
+func (a *App) handleUpdateDefaultCategory(c *gin.Context) {
+	id := c.Param("id")
+	var cat models.Category
+	if err := a.DB.First(&cat, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if cat.OwnerID == nil || *cat.OwnerID != zeroOwnerID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	var req struct {
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
+		SortOrder   *int    `json:"sort_order"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	if req.Name != nil {
+		cat.Name = *req.Name
+	}
+	if req.Description != nil {
+		cat.Description = *req.Description
+	}
+	if req.SortOrder != nil {
+		cat.SortOrder = *req.SortOrder
+	}
+	if err := a.DB.Save(&cat).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"category": cat})
+}
+
+func (a *App) handleDeleteDefaultCategory(c *gin.Context) {
+	id := c.Param("id")
+	var cat models.Category
+	if err := a.DB.First(&cat, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if cat.OwnerID == nil || *cat.OwnerID != zeroOwnerID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	a.DB.Delete(&cat)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (a *App) handleReorderDefaultCategories(c *gin.Context) {
+	var items []struct {
+		ID        uint `json:"id"`
+		SortOrder int  `json:"sort_order"`
+	}
+	if err := c.BindJSON(&items); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	for _, item := range items {
+		a.DB.Model(&models.Category{}).Where("id = ? AND owner_id = ?", item.ID, zeroOwnerID).Update("sort_order", item.SortOrder)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (a *App) handleListDefaultLinks(c *gin.Context) {
+	var links []models.Link
+	a.DB.Where("owner_id = ?", zeroOwnerID).Order("sort_order asc, id asc").Find(&links)
+	c.JSON(http.StatusOK, gin.H{"links": links})
+}
+
+func (a *App) handleCreateDefaultLink(c *gin.Context) {
+	var req struct {
+		CategoryID uint   `json:"category_id"`
+		Title      string `json:"title"`
+		URL        string `json:"url"`
+		IsPublic   bool   `json:"is_public"`
+		SortOrder  int    `json:"sort_order"`
+		IconURL    string `json:"icon_url"`
+		Remark     string `json:"remark"`
+	}
+	if err := c.BindJSON(&req); err != nil || req.Title == "" || req.URL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	var cat models.Category
+	if err := a.DB.First(&cat, req.CategoryID).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "category not found"})
+		return
+	}
+	if cat.OwnerID == nil || *cat.OwnerID != zeroOwnerID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "category must be a default category"})
+		return
+	}
+	icon := req.IconURL
+	if icon == "" {
+		icon = guessIcon(req.URL)
+	}
+	link := models.Link{CategoryID: req.CategoryID, Title: req.Title, URL: req.URL, IsPublic: req.IsPublic, SortOrder: req.SortOrder, IconURL: icon, Remark: req.Remark, OwnerID: &zeroOwnerID}
+	if err := a.DB.Create(&link).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"link": link})
+}
+
+func (a *App) handleUpdateDefaultLink(c *gin.Context) {
+	id := c.Param("id")
+	var link models.Link
+	if err := a.DB.First(&link, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if link.OwnerID == nil || *link.OwnerID != zeroOwnerID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	var req struct {
+		CategoryID *uint   `json:"category_id"`
+		Title      *string `json:"title"`
+		URL        *string `json:"url"`
+		IsPublic   *bool   `json:"is_public"`
+		SortOrder  *int    `json:"sort_order"`
+		IconURL    *string `json:"icon_url"`
+		Remark     *string `json:"remark"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	if req.CategoryID != nil {
+		var cat models.Category
+		if err := a.DB.First(&cat, *req.CategoryID).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "category not found"})
+			return
+		}
+		if cat.OwnerID == nil || *cat.OwnerID != zeroOwnerID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "category must be a default category"})
+			return
+		}
+		link.CategoryID = *req.CategoryID
+	}
+	if req.Title != nil {
+		link.Title = *req.Title
+	}
+	if req.URL != nil {
+		link.URL = *req.URL
+	}
+	if req.IsPublic != nil {
+		link.IsPublic = *req.IsPublic
+	}
+	if req.SortOrder != nil {
+		link.SortOrder = *req.SortOrder
+	}
+	if req.IconURL != nil {
+		link.IconURL = *req.IconURL
+	}
+	if req.Remark != nil {
+		link.Remark = *req.Remark
+	}
+	if err := a.DB.Save(&link).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"link": link})
+}
+
+func (a *App) handleDeleteDefaultLink(c *gin.Context) {
+	id := c.Param("id")
+	var link models.Link
+	if err := a.DB.First(&link, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if link.OwnerID == nil || *link.OwnerID != zeroOwnerID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	a.DB.Delete(&link)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (a *App) handleReorderDefaultLinks(c *gin.Context) {
+	var items []struct {
+		ID        uint `json:"id"`
+		SortOrder int  `json:"sort_order"`
+	}
+	if err := c.BindJSON(&items); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	for _, item := range items {
+		a.DB.Model(&models.Link{}).Where("id = ? AND owner_id = ?", item.ID, zeroOwnerID).Update("sort_order", item.SortOrder)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

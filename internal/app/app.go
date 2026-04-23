@@ -37,7 +37,7 @@ func New() *App {
 // NewWithConfig allows constructing the application with a pre-loaded configuration.
 func NewWithConfig(cfg *config.Config) *App {
 	db := database.Connect(cfg.DBPath)
-	database.MustMigrate(db, &models.User{}, &models.Category{}, &models.Link{}, &models.Bookmark{}, &models.Click{})
+	database.MustMigrate(db, &models.User{}, &models.Category{}, &models.Link{}, &models.Bookmark{}, &models.Click{}, &models.Shortcut{})
 	database.SeedAdmin(db, cfg.AdminEmail, cfg.AdminPassword, auth.HashPassword)
 
 	oauthCfg := &oauth2.Config{

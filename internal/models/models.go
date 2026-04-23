@@ -63,3 +63,11 @@ type Click struct {
 	UA        string    `gorm:"size:512" json:"ua"`
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
 }
+
+type Shortcut struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	OwnerID   uint      `gorm:"uniqueIndex;not null" json:"owner_id"`
+	Links     string    `gorm:"size:512" json:"links"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
