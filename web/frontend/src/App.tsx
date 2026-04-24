@@ -7,6 +7,8 @@ type User = { id: number; email: string; nickname?: string; enabled?: boolean; i
 type AdminUser = User & { created_at: string; updated_at: string }
 type Category = { id: number; name: string; description?: string; sort_order: number; owner_id?: number }
 type LinkItem = { id: number; category_id: number; title: string; url: string; is_public: boolean; sort_order: number; icon_url?: string; click_count?: number; remark?: string; owner_id?: number }
+type BookmarkItem = { id: number; client_uuid: string; title: string; url: string; group_name: string; sort_order: number; is_deleted?: boolean; deleted_at?: string | null; created_at?: string; updated_at?: string }
+type AdminTab = 'profile' | 'categories' | 'links' | 'bookmarks' | 'shortcuts' | 'users' | 'default-categories' | 'default-links'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
@@ -251,11 +253,13 @@ function AdminPage({
   loadAll: () => Promise<void>
 }) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [tab, setTab] = useState<'categories' | 'links' | 'users' | 'profile' | 'default-categories' | 'default-links'>(() => {
-    const initialTab = searchParams.get('tab')
-    return initialTab === 'profile' ? 'profile' : 'categories'
+  const [tab, setTab] = useState<AdminTab>(() => {
+    const initialTab = searchParams.get('tab') as AdminTab | null
+    const validTabs: AdminTab[] = ['profile', 'categories', 'links', 'bookmarks', 'shortcuts', 'users', 'default-categories', 'default-links']
+    return initialTab && validTabs.includes(initialTab) ? initialTab : 'profile'
   })
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [mobileConfigOpen, setMobileConfigOpen] = useState(false)
   const [systemConfigOpen, setSystemConfigOpen] = useState(false)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [authForm, setAuthForm] = useState({ email: '', password: '', nickname: '', otp: '' })
@@ -277,6 +281,14 @@ function AdminPage({
   const [editingDefaultLink, setEditingDefaultLink] = useState<LinkItem | null>(null)
   const [defaultCategoryForm, setDefaultCategoryForm] = useState({ name: '', description: '', sort_order: 0 })
   const [defaultLinkForm, setDefaultLinkForm] = useState({ category_id: '', title: '', url: '', is_public: true, sort_order: 0, icon_url: '', remark: '' })
+  const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([])
+  const [bookmarksLoading, setBookmarksLoading] = useState(false)
+  const [bookmarkForm, setBookmarkForm] = useState({ title: '', url: '', group_name: 'Favorites', sort_order: 0 })
+  const [editingBookmark, setEditingBookmark] = useState<BookmarkItem | null>(null)
+  const [shortcutCatalogCategories, setShortcutCatalogCategories] = useState<Category[]>([])
+  const [shortcutCatalogLinks, setShortcutCatalogLinks] = useState<LinkItem[]>([])
+  const [selectedShortcutLinkIds, setSelectedShortcutLinkIds] = useState<number[]>([])
+  const [shortcutsLoading, setShortcutsLoading] = useState(false)
 
   const showMessage = useCallback((msg: string) => {
     setMessage(msg)
@@ -284,10 +296,11 @@ function AdminPage({
   }, [setMessage])
 
   useEffect(() => {
-    if (searchParams.get('tab') === 'profile') {
-      setTab('profile')
-      setSearchParams({}, { replace: true })
-    }
+    const nextTab = searchParams.get('tab') as AdminTab | null
+    if (!nextTab) return
+    const validTabs: AdminTab[] = ['profile', 'categories', 'links', 'bookmarks', 'shortcuts', 'users', 'default-categories', 'default-links']
+    setTab(validTabs.includes(nextTab) ? nextTab : 'profile')
+    setSearchParams({}, { replace: true })
   }, [searchParams, setSearchParams])
 
   const handleEditCategory = (cat: Category) => {
@@ -446,19 +459,6 @@ function AdminPage({
     }
   }, [enabledFilter, showMessage, user?.is_admin, userSearch])
 
-  useEffect(() => {
-    if (!user) return
-    if (user.is_admin && tab === 'users') {
-      void reloadUsers()
-    }
-    if (user.is_admin && (tab === 'default-categories' || tab === 'default-links')) {
-      void loadDefaultCategories()
-      if (tab === 'default-links') {
-        void loadDefaultLinks()
-      }
-    }
-  }, [reloadUsers, tab, user])
-
   const loadDefaultCategories = useCallback(async () => {
     try {
       const res = await api<{ categories: Category[] }>('/api/admin/default-categories')
@@ -476,6 +476,54 @@ function AdminPage({
       console.error(error)
     }
   }, [])
+
+  const loadBookmarks = useCallback(async () => {
+    setBookmarksLoading(true)
+    try {
+      const res = await api<{ bookmarks: BookmarkItem[] }>('/api/bookmarks')
+      setBookmarks(res.bookmarks || [])
+    } catch (error) {
+      showMessage(getErrorMessage(error, '获取书签失败'))
+    } finally {
+      setBookmarksLoading(false)
+    }
+  }, [showMessage])
+
+  const loadShortcuts = useCallback(async () => {
+    setShortcutsLoading(true)
+    try {
+      const [catalog, selection] = await Promise.all([
+        api<{ categories: Category[]; links: LinkItem[] }>('/api/mobile/shortcut-catalog'),
+        api<{ link_ids: number[] }>('/api/mobile/shortcuts'),
+      ])
+      setShortcutCatalogCategories(catalog.categories || [])
+      setShortcutCatalogLinks(catalog.links || [])
+      setSelectedShortcutLinkIds(selection.link_ids || [])
+    } catch (error) {
+      showMessage(getErrorMessage(error, '获取快捷站点失败'))
+    } finally {
+      setShortcutsLoading(false)
+    }
+  }, [showMessage])
+
+  useEffect(() => {
+    if (!user) return
+    if (user.is_admin && tab === 'users') {
+      void reloadUsers()
+    }
+    if (tab === 'bookmarks') {
+      void loadBookmarks()
+    }
+    if (tab === 'shortcuts') {
+      void loadShortcuts()
+    }
+    if (user.is_admin && (tab === 'default-categories' || tab === 'default-links')) {
+      void loadDefaultCategories()
+      if (tab === 'default-links') {
+        void loadDefaultLinks()
+      }
+    }
+  }, [loadBookmarks, loadDefaultCategories, loadDefaultLinks, loadShortcuts, reloadUsers, tab, user])
 
   useEffect(() => {
     if (tab === 'profile' && user) {
@@ -503,6 +551,67 @@ function AdminPage({
       await loadAll()
     } catch (error) {
       showMessage(getErrorMessage(error, '创建链接失败'))
+    }
+  }
+
+  const handleCreateBookmark = async () => {
+    try {
+      await api('/api/bookmarks', { method: 'POST', body: JSON.stringify(bookmarkForm) })
+      setBookmarkForm({ title: '', url: '', group_name: 'Favorites', sort_order: 0 })
+      showMessage('书签已创建')
+      await loadBookmarks()
+    } catch (error) {
+      showMessage(getErrorMessage(error, '创建书签失败'))
+    }
+  }
+
+  const handleUpdateBookmark = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingBookmark) return
+    try {
+      await api(`/api/bookmarks/${editingBookmark.id}`, { method: 'PUT', body: JSON.stringify(editingBookmark) })
+      setEditingBookmark(null)
+      showMessage('书签已更新')
+      await loadBookmarks()
+    } catch (error) {
+      showMessage(getErrorMessage(error, '更新书签失败'))
+    }
+  }
+
+  const handleDeleteBookmark = async (bookmark: BookmarkItem) => {
+    if (!window.confirm(`确认删除书签「${bookmark.title}」？`)) return
+    try {
+      await api(`/api/bookmarks/${bookmark.id}`, { method: 'DELETE' })
+      showMessage('书签已删除')
+      await loadBookmarks()
+    } catch (error) {
+      showMessage(getErrorMessage(error, '删除书签失败'))
+    }
+  }
+
+  const toggleShortcutLink = (linkID: number) => {
+    setSelectedShortcutLinkIds((current) => current.includes(linkID) ? current.filter((id) => id !== linkID) : [...current, linkID])
+  }
+
+  const moveShortcutLink = (linkID: number, direction: -1 | 1) => {
+    setSelectedShortcutLinkIds((current) => {
+      const index = current.indexOf(linkID)
+      const nextIndex = index + direction
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) return current
+      const updated = [...current]
+      const [removed] = updated.splice(index, 1)
+      updated.splice(nextIndex, 0, removed)
+      return updated
+    })
+  }
+
+  const handleSaveShortcuts = async () => {
+    try {
+      const res = await api<{ link_ids: number[] }>('/api/mobile/shortcuts', { method: 'PUT', body: JSON.stringify({ link_ids: selectedShortcutLinkIds }) })
+      setSelectedShortcutLinkIds(res.link_ids || [])
+      showMessage('快捷站点已保存')
+    } catch (error) {
+      showMessage(getErrorMessage(error, '保存快捷站点失败'))
     }
   }
 
@@ -582,6 +691,18 @@ function AdminPage({
     }
   }
 
+  const bookmarksByGroup = useMemo(() => {
+    const map = new Map<string, BookmarkItem[]>()
+    bookmarks.forEach((bookmark) => {
+      const groupName = bookmark.group_name || 'Favorites'
+      map.set(groupName, [...(map.get(groupName) || []), bookmark])
+    })
+    return Array.from(map.entries()).map(([groupName, items]) => ({ groupName, items: items.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id) }))
+  }, [bookmarks])
+
+  const shortcutLinkMap = useMemo(() => new Map(shortcutCatalogLinks.map((link) => [link.id, link])), [shortcutCatalogLinks])
+  const selectedShortcutLinks = useMemo(() => selectedShortcutLinkIds.map((id) => shortcutLinkMap.get(id)).filter((link): link is LinkItem => Boolean(link)), [selectedShortcutLinkIds, shortcutLinkMap])
+
   const containerClass = user ? "grid gap-6 lg:grid-cols-[220px_1fr]" : "max-w-xl mx-auto space-y-4";
 
   return (
@@ -597,15 +718,30 @@ function AdminPage({
           </button>
           <aside className="hidden h-fit w-[240px] rounded-2xl bg-white p-5 shadow-lg lg:block sticky top-8">
             <nav className="flex flex-col gap-2 text-sm font-medium text-gray-600">
+              <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('profile')}>
+                <span>👤</span> 个人信息
+              </button>
               <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('categories')}>
                 <span>📁</span> 分类管理
               </button>
               <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('links')}>
                 <span>🔗</span> 链接管理
               </button>
-              <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('profile')}>
-                <span>👤</span> 个人信息
+              <button className="flex items-center gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-accent/10 hover:text-accent" onClick={() => setMobileConfigOpen(o => !o)}>
+                <span>📱</span>
+                <span className="flex-1 text-left">手机配置</span>
+                <span className={`text-xs transition-transform ${mobileConfigOpen ? 'rotate-90' : ''}`}>▶</span>
               </button>
+              {mobileConfigOpen && (
+                <div className="ml-4 flex flex-col gap-1">
+                  <button className={`flex items-center gap-3 rounded-xl px-4 py-2 transition-colors text-xs ${tab === 'bookmarks' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('bookmarks')}>
+                    <span>🔖</span> 我的书签
+                  </button>
+                  <button className={`flex items-center gap-3 rounded-xl px-4 py-2 transition-colors text-xs ${tab === 'shortcuts' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => setTab('shortcuts')}>
+                    <span>⚡</span> 快捷站点
+                  </button>
+                </div>
+              )}
               {user.is_admin && (
                 <>
                   <div className="my-1 border-t border-gray-100" />
@@ -639,15 +775,30 @@ function AdminPage({
                   <div className="text-sm font-semibold text-gray-700">菜单</div>
                   <button onClick={() => setMobileNavOpen(false)} className="text-gray-500 hover:text-gray-800">✕</button>
                 </div>
+                <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('profile'); setMobileNavOpen(false) }}>
+                  <span>👤</span> 个人信息
+                </button>
                 <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'categories' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('categories'); setMobileNavOpen(false) }}>
                   <span>📁</span> 分类管理
                 </button>
                 <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'links' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('links'); setMobileNavOpen(false) }}>
                   <span>🔗</span> 链接管理
                 </button>
-                <button className={`flex items-center gap-3 rounded-xl px-4 py-3 transition-colors ${tab === 'profile' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('profile'); setMobileNavOpen(false) }}>
-                  <span>👤</span> 个人信息
+                <button className="flex items-center gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-accent/10 hover:text-accent" onClick={() => setMobileConfigOpen(o => !o)}>
+                  <span>📱</span>
+                  <span className="flex-1 text-left">手机配置</span>
+                  <span className={`text-xs transition-transform ${mobileConfigOpen ? 'rotate-90' : ''}`}>▶</span>
                 </button>
+                {mobileConfigOpen && (
+                  <div className="ml-4 flex flex-col gap-1">
+                    <button className={`flex items-center gap-3 rounded-xl px-4 py-2 transition-colors text-xs ${tab === 'bookmarks' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('bookmarks'); setMobileNavOpen(false) }}>
+                      <span>🔖</span> 我的书签
+                    </button>
+                    <button className={`flex items-center gap-3 rounded-xl px-4 py-2 transition-colors text-xs ${tab === 'shortcuts' ? 'bg-accent/10 text-accent' : 'hover:bg-accent/10 hover:text-accent'}`} onClick={() => { setTab('shortcuts'); setMobileNavOpen(false) }}>
+                      <span>⚡</span> 快捷站点
+                    </button>
+                  </div>
+                )}
                 {user.is_admin && (
                   <>
                     <div className="my-1 border-t border-gray-100" />
@@ -898,6 +1049,130 @@ function AdminPage({
               </Droppable>
             </DragDropContext>
           </div>
+        </div>
+      )}
+
+      {user && tab === 'bookmarks' && (
+        <div className="space-y-6">
+          <div className="rounded-2xl bg-white p-6 shadow-lg">
+            <h3 className="mb-4 text-xl font-bold text-gray-800">新增书签</h3>
+            <div className="grid gap-4 md:grid-cols-2">
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="标题" value={bookmarkForm.title} onChange={(e) => setBookmarkForm({ ...bookmarkForm, title: e.target.value })} />
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="URL" value={bookmarkForm.url} onChange={(e) => setBookmarkForm({ ...bookmarkForm, url: e.target.value })} />
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="分组" value={bookmarkForm.group_name} onChange={(e) => setBookmarkForm({ ...bookmarkForm, group_name: e.target.value })} />
+              <input className="w-full rounded-lg border border-gray-300 px-4 py-2.5 outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" placeholder="排序(数字)" type="number" value={bookmarkForm.sort_order} onChange={(e) => setBookmarkForm({ ...bookmarkForm, sort_order: Number(e.target.value) })} />
+              <button onClick={handleCreateBookmark} className="rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-md hover:bg-opacity-90 transition-all active:scale-95 md:col-span-2">新增书签</button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white p-6 shadow-lg space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-bold text-gray-800">我的书签</h3>
+              <button onClick={loadBookmarks} className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm ring-1 ring-gray-200 hover:bg-gray-50">刷新</button>
+            </div>
+            {bookmarksLoading ? (
+              <div className="text-sm text-gray-500">加载书签中...</div>
+            ) : bookmarksByGroup.length === 0 ? (
+              <div className="text-sm text-gray-500">暂无书签。</div>
+            ) : (
+              <div className="space-y-6">
+                {bookmarksByGroup.map(({ groupName, items }) => (
+                  <div key={groupName} className="space-y-3 rounded-xl border border-gray-100 bg-gray-50 p-4">
+                    <div className="text-base font-semibold text-gray-800">{groupName}</div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {items.map((bookmark) => (
+                        <div key={bookmark.id} className="flex items-center gap-3 rounded-lg bg-white p-3 shadow-sm border border-gray-100">
+                          <div className="h-8 w-8 flex items-center justify-center rounded bg-accent/10 text-xs text-accent font-bold">{bookmark.title[0] || '书'}</div>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium text-gray-700">{bookmark.title}</div>
+                            <div className="truncate text-xs text-gray-400">{bookmark.url}</div>
+                          </div>
+                          <div className="flex gap-1">
+                            <button onClick={() => setEditingBookmark(bookmark)} className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700">编辑</button>
+                            <button onClick={() => handleDeleteBookmark(bookmark)} className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-50 hover:text-red-600">删</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {user && tab === 'shortcuts' && (
+        <div className="space-y-6">
+          <div className="rounded-2xl bg-white p-6 shadow-lg">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-gray-800">快捷站点</h3>
+                <p className="mt-1 text-sm text-gray-500">从系统默认链接中选择手机端快捷入口。</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={loadShortcuts} className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-gray-200 hover:bg-gray-50">刷新</button>
+                <button onClick={handleSaveShortcuts} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-opacity-90">保存</button>
+              </div>
+            </div>
+          </div>
+
+          {shortcutsLoading ? (
+            <div className="rounded-2xl bg-white p-6 text-sm text-gray-500 shadow-lg">加载快捷站点中...</div>
+          ) : shortcutCatalogLinks.length === 0 ? (
+            <div className="rounded-2xl bg-white p-6 text-sm text-gray-500 shadow-lg">暂无可选快捷站点，请联系管理员在系统配置 / 默认链接中添加。</div>
+          ) : (
+            <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
+              <div className="rounded-2xl bg-white p-6 shadow-lg space-y-5">
+                <h3 className="text-lg font-bold text-gray-800">可选站点</h3>
+                {shortcutCatalogCategories.sort((a, b) => a.sort_order - b.sort_order).map((cat) => {
+                  const catLinks = shortcutCatalogLinks.filter((link) => link.category_id === cat.id).sort((a, b) => a.sort_order - b.sort_order)
+                  if (catLinks.length === 0) return null
+                  return (
+                    <div key={cat.id} className="space-y-3 rounded-xl border border-gray-100 bg-gray-50 p-4">
+                      <div className="font-semibold text-gray-800">{cat.name}</div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {catLinks.map((link) => (
+                          <label key={link.id} className="flex cursor-pointer items-center gap-3 rounded-lg bg-white p-3 shadow-sm border border-gray-100 hover:shadow-md">
+                            <input type="checkbox" checked={selectedShortcutLinkIds.includes(link.id)} onChange={() => toggleShortcutLink(link.id)} className="h-5 w-5 rounded border-gray-300 text-accent focus:ring-accent" />
+                            {link.icon_url ? <img src={link.icon_url} alt="" className="h-6 w-6 rounded" /> : <div className="h-6 w-6 flex items-center justify-center rounded bg-accent/10 text-xs text-accent font-bold">{link.title[0]}</div>}
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-gray-700">{link.title}</div>
+                              <div className="truncate text-xs text-gray-400">{link.url}</div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow-lg space-y-4">
+                <h3 className="text-lg font-bold text-gray-800">已选择</h3>
+                {selectedShortcutLinks.length === 0 ? (
+                  <div className="text-sm text-gray-500">尚未选择快捷站点。</div>
+                ) : (
+                  <div className="space-y-3">
+                    {selectedShortcutLinks.map((link, index) => (
+                      <div key={link.id} className="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
+                        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white text-xs text-gray-500 shadow-sm">{index + 1}</span>
+                        {link.icon_url ? <img src={link.icon_url} alt="" className="h-6 w-6 rounded" /> : <div className="h-6 w-6 flex items-center justify-center rounded bg-accent/10 text-xs text-accent font-bold">{link.title[0]}</div>}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-gray-700">{link.title}</div>
+                          <div className="truncate text-xs text-gray-400">{link.url}</div>
+                        </div>
+                        <div className="flex gap-1">
+                          <button onClick={() => moveShortcutLink(link.id, -1)} className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-white">上</button>
+                          <button onClick={() => moveShortcutLink(link.id, 1)} className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-white">下</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1306,6 +1581,50 @@ function AdminPage({
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setEditingCategory(null)} className="rounded-lg bg-gray-100 px-4 py-2 text-sm text-gray-700 hover:bg-gray-200">取消</button>
+            <button type="submit" className="rounded-lg bg-accent px-4 py-2 text-sm text-white shadow-md hover:bg-opacity-90">保存</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal isOpen={!!editingBookmark} onClose={() => setEditingBookmark(null)} title="编辑书签">
+        <form onSubmit={handleUpdateBookmark} className="flex flex-col gap-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">标题</label>
+            <input
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+              value={editingBookmark?.title || ''}
+              onChange={(e) => setEditingBookmark(prev => prev ? ({ ...prev, title: e.target.value }) : null)}
+              required
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">URL</label>
+            <input
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+              value={editingBookmark?.url || ''}
+              onChange={(e) => setEditingBookmark(prev => prev ? ({ ...prev, url: e.target.value }) : null)}
+              required
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">分组</label>
+            <input
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+              value={editingBookmark?.group_name || ''}
+              onChange={(e) => setEditingBookmark(prev => prev ? ({ ...prev, group_name: e.target.value }) : null)}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">排序</label>
+            <input
+              type="number"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+              value={editingBookmark?.sort_order || 0}
+              onChange={(e) => setEditingBookmark(prev => prev ? ({ ...prev, sort_order: Number(e.target.value) }) : null)}
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={() => setEditingBookmark(null)} className="rounded-lg bg-gray-100 px-4 py-2 text-sm text-gray-700 hover:bg-gray-200">取消</button>
             <button type="submit" className="rounded-lg bg-accent px-4 py-2 text-sm text-white shadow-md hover:bg-opacity-90">保存</button>
           </div>
         </form>

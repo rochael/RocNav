@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,20 +24,30 @@ type authSessionTestResponse struct {
 	TOTPURL    string `json:"totp_url"`
 }
 
+type bookmarkTestItem struct {
+	ID         uint       `json:"id"`
+	ClientUUID string     `json:"client_uuid"`
+	Title      string     `json:"title"`
+	URL        string     `json:"url"`
+	GroupName  string     `json:"group_name"`
+	SortOrder  int        `json:"sort_order"`
+	IsDeleted  bool       `json:"is_deleted"`
+	DeletedAt  *time.Time `json:"deleted_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
 type bookmarkSyncTestResponse struct {
-	Bookmarks []struct {
-		ID         uint       `json:"id"`
-		ClientUUID string     `json:"client_uuid"`
-		Title      string     `json:"title"`
-		URL        string     `json:"url"`
-		GroupName  string     `json:"group_name"`
-		SortOrder  int        `json:"sort_order"`
-		IsDeleted  bool       `json:"is_deleted"`
-		DeletedAt  *time.Time `json:"deleted_at"`
-		CreatedAt  time.Time  `json:"created_at"`
-		UpdatedAt  time.Time  `json:"updated_at"`
-	} `json:"bookmarks"`
-	ServerTime string `json:"server_time"`
+	Bookmarks  []bookmarkTestItem `json:"bookmarks"`
+	ServerTime string             `json:"server_time"`
+}
+
+type bookmarkListTestResponse struct {
+	Bookmarks []bookmarkTestItem `json:"bookmarks"`
+}
+
+type bookmarkItemTestResponse struct {
+	Bookmark bookmarkTestItem `json:"bookmark"`
 }
 
 type authMeTestResponse struct {
@@ -276,5 +287,101 @@ func TestBookmarkSyncLastWriteWinsAndTombstones(t *testing.T) {
 	tombstonePayload := decodeJSONResponse[bookmarkSyncTestResponse](t, tombstoneResp)
 	if len(tombstonePayload.Bookmarks) != 1 || !tombstonePayload.Bookmarks[0].IsDeleted {
 		t.Fatalf("expected tombstone to remain available when include_deleted=1")
+	}
+}
+
+func TestBookmarkCRUDScopesToCurrentUserAndSoftDeletes(t *testing.T) {
+	app := newTestApp(t)
+
+	unauthorizedResp := performJSONRequest(t, app.Router, http.MethodGet, "/api/bookmarks", nil, "")
+	if unauthorizedResp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized list 401, got %d", unauthorizedResp.Code)
+	}
+
+	registerAResp := performJSONRequest(t, app.Router, http.MethodPost, "/api/auth/register", map[string]any{
+		"email":    "bookmark-crud-a@example.com",
+		"password": "password123",
+		"nickname": "User A",
+	}, "")
+	if registerAResp.Code != http.StatusOK {
+		t.Fatalf("expected register A 200, got %d: %s", registerAResp.Code, registerAResp.Body.String())
+	}
+	userA := decodeJSONResponse[authSessionTestResponse](t, registerAResp)
+
+	registerBResp := performJSONRequest(t, app.Router, http.MethodPost, "/api/auth/register", map[string]any{
+		"email":    "bookmark-crud-b@example.com",
+		"password": "password123",
+		"nickname": "User B",
+	}, "")
+	if registerBResp.Code != http.StatusOK {
+		t.Fatalf("expected register B 200, got %d: %s", registerBResp.Code, registerBResp.Body.String())
+	}
+	userB := decodeJSONResponse[authSessionTestResponse](t, registerBResp)
+
+	createResp := performJSONRequest(t, app.Router, http.MethodPost, "/api/bookmarks", map[string]any{
+		"title":      "Docs",
+		"url":        "https://example.com/docs",
+		"group_name": "Work",
+		"sort_order": 2,
+	}, userA.Token)
+	if createResp.Code != http.StatusOK {
+		t.Fatalf("expected create 200, got %d: %s", createResp.Code, createResp.Body.String())
+	}
+	created := decodeJSONResponse[bookmarkItemTestResponse](t, createResp)
+	if created.Bookmark.ClientUUID == "" || created.Bookmark.GroupName != "Work" {
+		t.Fatalf("unexpected created bookmark: %+v", created.Bookmark)
+	}
+
+	updateByOtherResp := performJSONRequest(t, app.Router, http.MethodPut, "/api/bookmarks/"+strconv.FormatUint(uint64(created.Bookmark.ID), 10), map[string]any{
+		"title": "Other",
+		"url":   "https://example.com/other",
+	}, userB.Token)
+	if updateByOtherResp.Code != http.StatusNotFound {
+		t.Fatalf("expected cross-user update 404, got %d: %s", updateByOtherResp.Code, updateByOtherResp.Body.String())
+	}
+
+	updateResp := performJSONRequest(t, app.Router, http.MethodPut, "/api/bookmarks/"+strconv.FormatUint(uint64(created.Bookmark.ID), 10), map[string]any{
+		"title":      "Docs Updated",
+		"url":        "https://example.com/docs-updated",
+		"group_name": "Work",
+		"sort_order": 0,
+	}, userA.Token)
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("expected update 200, got %d: %s", updateResp.Code, updateResp.Body.String())
+	}
+	updated := decodeJSONResponse[bookmarkItemTestResponse](t, updateResp)
+	if updated.Bookmark.Title != "Docs Updated" || updated.Bookmark.SortOrder != 0 {
+		t.Fatalf("unexpected updated bookmark: %+v", updated.Bookmark)
+	}
+
+	listResp := performJSONRequest(t, app.Router, http.MethodGet, "/api/bookmarks", nil, userA.Token)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected list 200, got %d: %s", listResp.Code, listResp.Body.String())
+	}
+	list := decodeJSONResponse[bookmarkListTestResponse](t, listResp)
+	if len(list.Bookmarks) != 1 || list.Bookmarks[0].Title != "Docs Updated" {
+		t.Fatalf("expected own updated bookmark, got %+v", list.Bookmarks)
+	}
+
+	deleteByOtherResp := performJSONRequest(t, app.Router, http.MethodDelete, "/api/bookmarks/"+strconv.FormatUint(uint64(created.Bookmark.ID), 10), nil, userB.Token)
+	if deleteByOtherResp.Code != http.StatusNotFound {
+		t.Fatalf("expected cross-user delete 404, got %d", deleteByOtherResp.Code)
+	}
+
+	deleteResp := performJSONRequest(t, app.Router, http.MethodDelete, "/api/bookmarks/"+strconv.FormatUint(uint64(created.Bookmark.ID), 10), nil, userA.Token)
+	if deleteResp.Code != http.StatusNoContent {
+		t.Fatalf("expected delete 204, got %d: %s", deleteResp.Code, deleteResp.Body.String())
+	}
+
+	visibleResp := performJSONRequest(t, app.Router, http.MethodGet, "/api/bookmarks", nil, userA.Token)
+	visible := decodeJSONResponse[bookmarkListTestResponse](t, visibleResp)
+	if len(visible.Bookmarks) != 0 {
+		t.Fatalf("expected soft-deleted bookmark hidden from list, got %+v", visible.Bookmarks)
+	}
+
+	tombstoneResp := performJSONRequest(t, app.Router, http.MethodGet, "/api/bookmarks/sync?include_deleted=1", nil, userA.Token)
+	tombstone := decodeJSONResponse[bookmarkSyncTestResponse](t, tombstoneResp)
+	if len(tombstone.Bookmarks) != 1 || !tombstone.Bookmarks[0].IsDeleted || tombstone.Bookmarks[0].DeletedAt == nil {
+		t.Fatalf("expected soft-deleted tombstone in sync, got %+v", tombstone.Bookmarks)
 	}
 }

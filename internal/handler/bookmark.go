@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rochael/RocNav/internal/models"
+	"github.com/rochael/RocNav/internal/repository"
 	"github.com/rochael/RocNav/internal/service"
 )
 
@@ -16,6 +17,13 @@ type BookmarkHandler struct {
 
 func NewBookmarkHandler(svc *service.BookmarkService) *BookmarkHandler {
 	return &BookmarkHandler{svc: svc}
+}
+
+type bookmarkInput struct {
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+	GroupName string `json:"group_name"`
+	SortOrder int    `json:"sort_order"`
 }
 
 type bookmarkSyncItem struct {
@@ -33,11 +41,92 @@ type bookmarkSyncItem struct {
 
 func (h *BookmarkHandler) GetSync(c *gin.Context) {
 	user := c.MustGet("user").(*models.User)
-	since, _ := parseSyncSince(c.Query("since"))
+	since, err := parseSyncSince(c.Query("since"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid since"})
+		return
+	}
 	includeDeleted := c.Query("include_deleted") == "1" || strings.EqualFold(c.Query("include_deleted"), "true")
 
-	bookmarks, serverTime, _ := h.svc.GetForUserWithOptions(user.ID, since, includeDeleted)
+	bookmarks, serverTime, err := h.svc.GetForUserWithOptions(user.ID, since, includeDeleted)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load failed"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"bookmarks": serializeBookmarks(bookmarks), "server_time": serverTime.Format(time.RFC3339Nano)})
+}
+
+func (h *BookmarkHandler) List(c *gin.Context) {
+	user := c.MustGet("user").(*models.User)
+	bookmarks, err := h.svc.ListActive(user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"bookmarks": serializeBookmarks(bookmarks)})
+}
+
+func (h *BookmarkHandler) Create(c *gin.Context) {
+	user := c.MustGet("user").(*models.User)
+	var req bookmarkInput
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	bookmark, err := h.svc.Create(user.ID, service.BookmarkInput(req))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"bookmark": serializeBookmarks([]models.Bookmark{*bookmark})[0]})
+}
+
+func (h *BookmarkHandler) Update(c *gin.Context) {
+	user := c.MustGet("user").(*models.User)
+	id := parseUint(c.Param("id"))
+	if id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var req bookmarkInput
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	bookmark, err := h.svc.Update(user.ID, id, service.BookmarkInput(req))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"bookmark": serializeBookmarks([]models.Bookmark{*bookmark})[0]})
+}
+
+func (h *BookmarkHandler) Delete(c *gin.Context) {
+	user := c.MustGet("user").(*models.User)
+	id := parseUint(c.Param("id"))
+	if id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	if err := h.svc.SoftDelete(user.ID, id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h *BookmarkHandler) Reorder(c *gin.Context) {
+	user := c.MustGet("user").(*models.User)
+	var req []repository.SortItem
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	if err := h.svc.Reorder(user.ID, req); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "reorder failed"})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (h *BookmarkHandler) PostSync(c *gin.Context) {

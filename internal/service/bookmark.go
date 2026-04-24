@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"strings"
 	"time"
 
@@ -30,8 +32,51 @@ func (s *BookmarkService) GetForUserWithOptions(userID uint, since time.Time, in
 	if !includeDeleted {
 		dbq = dbq.Where("is_deleted = 0")
 	}
-	dbq.Order("sort_order asc, id asc").Find(&bookmarks)
+	if err := dbq.Order("sort_order asc, id asc").Find(&bookmarks).Error; err != nil {
+		return nil, time.Time{}, err
+	}
 	return bookmarks, time.Now().UTC(), nil
+}
+
+func (s *BookmarkService) ListActive(userID uint) ([]models.Bookmark, error) {
+	return s.db.ListActiveByUser(userID)
+}
+
+func (s *BookmarkService) Create(userID uint, input BookmarkInput) (*models.Bookmark, error) {
+	bookmark := normalizeBookmarkInput(input)
+	bookmark.UserID = userID
+	bookmark.ClientUUID = newBookmarkClientUUID()
+	if err := s.db.Create(&bookmark); err != nil {
+		return nil, err
+	}
+	return &bookmark, nil
+}
+
+func (s *BookmarkService) Update(userID, id uint, input BookmarkInput) (*models.Bookmark, error) {
+	bookmark, err := s.db.FindActiveByUserAndID(userID, id)
+	if err != nil {
+		return nil, err
+	}
+	normalized := normalizeBookmarkInput(input)
+	bookmark.Title = normalized.Title
+	bookmark.URL = normalized.URL
+	bookmark.GroupName = normalized.GroupName
+	bookmark.SortOrder = normalized.SortOrder
+	if err := s.db.Update(bookmark); err != nil {
+		return nil, err
+	}
+	return bookmark, nil
+}
+
+func (s *BookmarkService) SoftDelete(userID, id uint) error {
+	if _, err := s.db.FindActiveByUserAndID(userID, id); err != nil {
+		return err
+	}
+	return s.db.SoftDelete(userID, id, time.Now().UTC())
+}
+
+func (s *BookmarkService) Reorder(userID uint, items []repository.SortItem) error {
+	return s.db.Reorder(userID, items)
 }
 
 func (s *BookmarkService) SyncChanges(userID uint, changes []BookmarkSyncItem, serverNow time.Time) error {
@@ -101,6 +146,13 @@ func (s *BookmarkService) SyncChanges(userID uint, changes []BookmarkSyncItem, s
 	})
 }
 
+type BookmarkInput struct {
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+	GroupName string `json:"group_name"`
+	SortOrder int    `json:"sort_order"`
+}
+
 type BookmarkSyncItem struct {
 	ID         uint       `json:"id"`
 	ClientUUID string     `json:"client_uuid"`
@@ -114,6 +166,30 @@ type BookmarkSyncItem struct {
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
+func normalizeBookmarkInput(item BookmarkInput) models.Bookmark {
+	normalized := models.Bookmark{
+		Title:     strings.TrimSpace(item.Title),
+		URL:       strings.TrimSpace(item.URL),
+		GroupName: strings.TrimSpace(item.GroupName),
+		SortOrder: item.SortOrder,
+	}
+	if normalized.GroupName == "" {
+		normalized.GroupName = "Favorites"
+	}
+	if normalized.Title == "" {
+		normalized.Title = normalized.URL
+	}
+	return normalized
+}
+
+func newBookmarkClientUUID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "web-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
+	}
+	return "web-" + hex.EncodeToString(buf)
+}
+
 func normalizeServiceBookmark(item BookmarkSyncItem, fallback time.Time) models.Bookmark {
 	normalized := models.Bookmark{
 		ID:         item.ID,
@@ -124,6 +200,8 @@ func normalizeServiceBookmark(item BookmarkSyncItem, fallback time.Time) models.
 		SortOrder:  item.SortOrder,
 		IsDeleted:  item.IsDeleted,
 		DeletedAt:  item.DeletedAt,
+		CreatedAt:  item.CreatedAt,
+		UpdatedAt:  item.UpdatedAt,
 	}
 	if normalized.GroupName == "" {
 		normalized.GroupName = "Favorites"
